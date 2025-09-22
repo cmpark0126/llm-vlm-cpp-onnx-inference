@@ -1,18 +1,21 @@
 # LLM/VLM C++ ONNX Inference
 
 ## Docker 개발 & 실행 환경
+Local 환경에서:
 ```bash
 docker build -t llm-vlm-dev .
 docker run -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
-exit # at container
+exit # Docker 컨테이너 내에서
 docker rm llm-vlm-dev
 ```
 
-## 프로젝트 구조
-```
-problem1-llm/    # 문제 1: LLM 텍스트 생성
-problem2-static/ # 문제 2: Static graph export & 텍스트 생성
-problem3-vlm/    # 문제 3: VLM 텍스트 생성
+## 베이스라인
+Docker 컨테이너 내에서:
+```bash
+git clone https://huggingface.co/geonmin-kim/llm_vlm_onnx_sample
+cd llm_vlm_onnx_sample
+git lfs pull
+python3 run_llm.py
 ```
 
 ## 실행 방법
