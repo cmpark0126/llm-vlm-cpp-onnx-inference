@@ -1,12 +1,11 @@
 # LLM/VLM C++ ONNX Inference
 
-## Docker 개발 환경
+## Docker 개발 & 실행 환경
 ```bash
-# Docker 이미지 빌드
 docker build -t llm-vlm-dev .
-
-# 개발 환경 실행
-docker run -it -v $(pwd):/workspace llm-vlm-dev
+docker run -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
+exit # at container
+docker rm llm-vlm-dev
 ```
 
 ## 프로젝트 구조
@@ -28,3 +27,17 @@ cd problem2-static && ./run.sh && cd ..
 # 문제 3: VLM 텍스트 생성
 cd problem3-vlm && ./run.sh && cd ..
 ```
+
+## 코드 품질 관리
+Docker 컨테이너 내에서:
+```bash
+# 수동으로 포맷팅 적용
+find . -name "*.cpp" -o -name "*.h" | xargs clang-format -i
+
+# 2. clang-tidy 실행 (각 프로젝트에서 -p 옵션으로 build 디렉토리 지정)
+cd problem1-llm && clang-tidy -p build main.cpp && cd ..
+cd problem2-static && clang-tidy -p build main.cpp && cd ..
+cd problem3-vlm && clang-tidy -p build main.cpp && cd ..
+```
+
+**GitHub Actions**: Push/PR 시 자동으로 clang-format과 clang-tidy 검사 실행

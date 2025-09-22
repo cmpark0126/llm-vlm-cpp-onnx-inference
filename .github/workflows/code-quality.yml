@@ -1,0 +1,37 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  code-quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format clang-tidy
+
+      - name: Check code formatting
+        run: |
+          clang-format --version
+          find . -name "*.cpp" -o -name "*.h" -o -name "*.hpp" | \
+          xargs clang-format --dry-run --Werror
+
+      - name: Run clang-tidy
+        run: |
+          clang-tidy --version
+          # Build projects to generate compile_commands.json
+          cd problem1-llm && mkdir -p build && cd build && cmake .. && make && cd ../..
+          cd problem2-static && mkdir -p build && cd build && cmake .. && make && cd ../..
+          cd problem3-vlm && mkdir -p build && cd build && cmake .. && make && cd ../..
+          # Run clang-tidy with compilation database
+          cd problem1-llm && clang-tidy -p build main.cpp && cd ..
+          cd problem2-static && clang-tidy -p build main.cpp && cd ..
+          cd problem3-vlm && clang-tidy -p build main.cpp && cd ..
