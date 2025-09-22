@@ -3,8 +3,8 @@
 ## Docker 개발 & 실행 환경
 Local 환경에서:
 ```bash
-docker build -t llm-vlm-dev .
-docker run -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
+docker build --platform linux/amd64 -t llm-vlm-dev .
+docker run --platform linux/amd64 -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
 exit # Docker 컨테이너 내에서
 docker rm llm-vlm-dev
 ```
