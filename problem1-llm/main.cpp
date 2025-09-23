@@ -7,6 +7,13 @@
 
 using json = nlohmann::json;
 
+// Constants
+const int DEFAULT_BATCH_SIZE = 1;
+const int DEFAULT_MAX_NEW_TOKENS = 10;
+const int DEFAULT_PRINT_TENSOR_MAX_ELEMENTS = 10;
+const int DEFAULT_PRINT_TENSOR_MAX_ELEMENTS_EXTENDED = 20;
+const int DEFAULT_EOS_TOKEN_ID = 106; // <end_of_turn>
+
 struct SimpleTokenizer {
     std::string tokenizer_path;
     json tokenizer_config;
@@ -169,18 +176,13 @@ Ort::Value create_input_ids_tensor(const std::vector<int64_t>& input_ids, int ba
     );
 }
 
-Ort::Value create_position_ids_tensor(int seq_len, int batch_size, const Ort::MemoryInfo& memory_info) {
-    static std::vector<int64_t> position_ids;
-    position_ids.clear();
-    for (int i = 1; i <= seq_len; i++) {
-        position_ids.push_back(i);
-    }
-
+Ort::Value create_position_ids_tensor(const std::vector<int64_t>& position_ids, int batch_size, const Ort::MemoryInfo& memory_info) {
+    int seq_len = position_ids.size();
     std::vector<int64_t> position_ids_shape = {batch_size, seq_len};
 
     return Ort::Value::CreateTensor<int64_t>(
         memory_info,
-        position_ids.data(),
+        const_cast<int64_t*>(position_ids.data()),
         position_ids.size(),
         position_ids_shape.data(),
         position_ids_shape.size()
@@ -223,8 +225,45 @@ std::vector<Ort::Value> create_past_kv_tensors(int num_hidden_layers, int batch_
     return past_kv_tensors;
 }
 
+std::vector<Ort::Value> create_past_kv_tensors_from_present(const std::vector<Ort::Value>& present_kv_outputs, int num_hidden_layers, const Ort::MemoryInfo& memory_info) {
+    std::vector<Ort::Value> past_kv_tensors;
+
+    // present_kv_outputs contains outputs[1], outputs[2], ... (outputs[0] is logits)
+    // Each output is a key or value tensor for a layer
+    for (size_t i = 0; i < present_kv_outputs.size(); i++) {
+        const auto& present_tensor = present_kv_outputs[i];
+        auto tensor_info = present_tensor.GetTensorTypeAndShapeInfo();
+        auto shape = tensor_info.GetShape();
+
+        // Copy data from present to new tensor
+        const float* present_data = present_tensor.GetTensorData<float>();
+        size_t data_size = 1;
+        for (auto dim : shape) data_size *= dim;
+
+        static std::vector<std::vector<float>> kv_data_storage;
+        if (kv_data_storage.size() < present_kv_outputs.size()) {
+            kv_data_storage.resize(present_kv_outputs.size());
+        }
+
+        kv_data_storage[i].resize(data_size);
+        std::copy(present_data, present_data + data_size, kv_data_storage[i].begin());
+
+        auto past_tensor = Ort::Value::CreateTensor<float>(
+            memory_info,
+            kv_data_storage[i].data(),
+            data_size,
+            shape.data(),
+            shape.size()
+        );
+
+        past_kv_tensors.push_back(std::move(past_tensor));
+    }
+
+    return past_kv_tensors;
+}
+
 template<typename T>
-void print_tensor(const Ort::Value& tensor, const std::string& name, int max_elements = 10) {
+void print_tensor(const Ort::Value& tensor, const std::string& name, int max_elements = DEFAULT_PRINT_TENSOR_MAX_ELEMENTS) {
     auto tensor_info = tensor.GetTensorTypeAndShapeInfo();
     auto shape = tensor_info.GetShape();
 
@@ -290,7 +329,7 @@ int main() {
     int num_key_value_heads = config_json["num_key_value_heads"];
     int head_dim = config_json["head_dim"];
     int num_hidden_layers = config_json["num_hidden_layers"];
-    int eos_token_id = 106; // 106 is for <end_of_turn>
+    int eos_token_id = DEFAULT_EOS_TOKEN_ID;
 
     std::cout << "Config loaded:" << std::endl;
     std::cout << "  num_key_value_heads: " << num_key_value_heads << std::endl;
@@ -315,7 +354,7 @@ int main() {
     std::cout << std::endl;
 
     // Prepare decoder inputs
-    int batch_size = 1;
+    int batch_size = DEFAULT_BATCH_SIZE;
     int seq_len = input_ids.size();
 
     std::cout << "Batch size: " << batch_size << std::endl;
@@ -327,7 +366,13 @@ int main() {
 
     // Create ONNX tensors
     auto input_ids_tensor = create_input_ids_tensor(input_ids, batch_size, memory_info);
-    auto position_ids_tensor = create_position_ids_tensor(seq_len, batch_size, memory_info);
+
+    // Create initial position_ids vector
+    std::vector<int64_t> initial_position_ids;
+    for (int i = 1; i <= seq_len; i++) {
+        initial_position_ids.push_back(i);
+    }
+    auto position_ids_tensor = create_position_ids_tensor(initial_position_ids, batch_size, memory_info);
     auto past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
 
     std::cout << "ONNX tensors created successfully:" << std::endl;
@@ -344,12 +389,149 @@ int main() {
         print_tensor<float>(past_kv_tensors[i], tensor_name);
     }
 
-    // // Load ONNX model
-    // std::string model_path = path_to_model + "/q4f16.onnx";
-    // Ort::SessionOptions session_options;
-    // Ort::Session decoder_session(env, model_path.c_str(), session_options);
+    // Load ONNX model
+    std::string model_path = path_to_model + "/q4f16.onnx";
+    Ort::SessionOptions session_options;
+    Ort::Session decoder_session(env, model_path.c_str(), session_options);
 
-    // std::cout << "ONNX model loaded successfully: " << model_path << std::endl;
+    std::cout << "ONNX model loaded successfully: " << model_path << std::endl;
+
+    // Get all output names dynamically from the model
+    Ort::AllocatorWithDefaultOptions allocator;
+    size_t output_count = decoder_session.GetOutputCount();
+    std::vector<const char*> output_names(output_count);
+    std::vector<std::string> output_names_storage(output_count);
+
+    std::cout << "Model has " << output_count << " outputs:" << std::endl;
+    for (size_t i = 0; i < output_count; ++i) {
+        auto output_name_allocated = decoder_session.GetOutputNameAllocated(i, allocator);
+        output_names_storage[i] = std::string(output_name_allocated.get());
+        output_names[i] = output_names_storage[i].c_str();
+        std::cout << "  Output " << i << ": " << output_names[i] << std::endl;
+    }
+
+    // Generation loop (simplified, no streaming)
+    int max_new_tokens = DEFAULT_MAX_NEW_TOKENS;
+    std::vector<int64_t> generated_tokens;
+
+    // Prepare input names
+    std::vector<const char*> input_names = {"input_ids", "position_ids"};
+
+    // Add past_key_values input names
+    for (int layer = 0; layer < num_hidden_layers; layer++) {
+        static std::vector<std::string> kv_names;
+        kv_names.push_back("past_key_values." + std::to_string(layer) + ".key");
+        kv_names.push_back("past_key_values." + std::to_string(layer) + ".value");
+        input_names.push_back(kv_names[layer * 2].c_str());
+        input_names.push_back(kv_names[layer * 2 + 1].c_str());
+    }
+
+    // Current state variables
+    std::vector<int64_t> current_input_ids = input_ids;
+    std::vector<int64_t> current_position_ids;
+    for (int i = 1; i <= seq_len; i++) {
+        current_position_ids.push_back(i);
+    }
+    std::vector<Ort::Value> current_past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
+
+    // Generation loop
+    for (int i = 0; i < max_new_tokens; i++) {
+        std::cout << "Generation step " << (i + 1) << "/" << max_new_tokens << std::endl;
+
+        // Create tensors for current iteration
+        auto current_input_ids_tensor = create_input_ids_tensor(current_input_ids, batch_size, memory_info);
+        auto current_position_ids_tensor = create_position_ids_tensor(current_position_ids, batch_size, memory_info);
+
+        // Prepare input values for this iteration
+        std::vector<Ort::Value> current_input_values;
+        current_input_values.push_back(std::move(current_input_ids_tensor));
+        current_input_values.push_back(std::move(current_position_ids_tensor));
+        for (auto& tensor : current_past_kv_tensors) {
+            current_input_values.push_back(std::move(tensor));
+        }
+
+        // Run inference
+        auto outputs = decoder_session.Run(Ort::RunOptions{nullptr},
+                                          input_names.data(),
+                                          current_input_values.data(),
+                                          current_input_values.size(),
+                                          output_names.data(),
+                                          output_names.size());
+
+        std::cout << "  Total outputs received: " << outputs.size() << std::endl;
+        std::cout << "  Model output count: " << output_count << std::endl;
+
+        // Get logits and find argmax (next token)
+        const float* logits_data = outputs[0].GetTensorData<float>();
+        auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+
+        // logits shape: [batch_size, seq_len, vocab_size]
+        int batch_size_out = logits_shape[0];
+        int seq_len_out = logits_shape[1];
+        int vocab_size = logits_shape[2];
+
+        // Get last token logits: logits[:, -1, :]
+        int last_token_offset = (seq_len_out - 1) * vocab_size;
+        const float* last_token_logits = logits_data + last_token_offset;
+
+        // Find argmax
+        int64_t next_token_id = 0;
+        float max_logit = last_token_logits[0];
+        for (int j = 1; j < vocab_size; j++) {
+            if (last_token_logits[j] > max_logit) {
+                max_logit = last_token_logits[j];
+                next_token_id = j;
+            }
+        }
+
+        std::cout << "  Next token ID: " << next_token_id << " (logit: " << max_logit << ")" << std::endl;
+
+        // Add to generated tokens
+        generated_tokens.push_back(next_token_id);
+
+        // Check for EOS token
+        if (next_token_id == eos_token_id) {
+            std::cout << "  EOS token reached, stopping generation" << std::endl;
+            break;
+        }
+
+        // Update state for next iteration (following Python logic)
+        // input_ids = logits[:, -1].argmax(-1, keepdims=True)
+        current_input_ids = {next_token_id};
+
+        // position_ids = position_ids[:, -1:] + 1
+        int64_t last_position = current_position_ids.back();
+        current_position_ids = {last_position + 1};
+
+        // Update past_key_values with present_key_values from outputs
+        // outputs[0] = logits, outputs[1..] = present_key_values
+        if (outputs.size() > 1) {
+            std::vector<Ort::Value> present_kv_outputs;
+            for (size_t j = 1; j < outputs.size(); j++) {
+                // Move outputs[j] to present_kv_outputs (outputs[0] is logits)
+                present_kv_outputs.push_back(std::move(outputs[j]));
+            }
+            current_past_kv_tensors = create_past_kv_tensors_from_present(present_kv_outputs, num_hidden_layers, memory_info);
+            std::cout << "  Updated past_key_values from " << present_kv_outputs.size() << " present outputs" << std::endl;
+        } else {
+            std::cout << "  No present_key_values in outputs, using empty past_key_values" << std::endl;
+            current_past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
+        }
+
+        std::cout << "  Updated input_ids: [" << current_input_ids[0] << "]" << std::endl;
+        std::cout << "  Updated position_ids: [" << current_position_ids[0] << "]" << std::endl;
+    }
+
+    // Final result
+    std::cout << "\nGeneration completed!" << std::endl;
+    std::cout << "Generated tokens: ";
+    for (int64_t token : generated_tokens) {
+        std::cout << token << " ";
+    }
+    std::cout << std::endl;
+
+    std::string decoded_text = tokenizer.decode(generated_tokens);
+    std::cout << "Decoded text: \"" << decoded_text << "\"" << std::endl;
 
     return 0;
 }
