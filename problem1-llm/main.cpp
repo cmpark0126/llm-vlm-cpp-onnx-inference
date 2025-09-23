@@ -156,6 +156,112 @@ struct SimpleTokenizer {
     }
 };
 
+Ort::Value create_input_ids_tensor(const std::vector<int64_t>& input_ids, int batch_size, const Ort::MemoryInfo& memory_info) {
+    int seq_len = input_ids.size();
+    std::vector<int64_t> input_ids_shape = {batch_size, seq_len};
+
+    return Ort::Value::CreateTensor<int64_t>(
+        memory_info,
+        const_cast<int64_t*>(input_ids.data()),
+        input_ids.size(),
+        input_ids_shape.data(),
+        input_ids_shape.size()
+    );
+}
+
+Ort::Value create_position_ids_tensor(int seq_len, int batch_size, const Ort::MemoryInfo& memory_info) {
+    static std::vector<int64_t> position_ids;
+    position_ids.clear();
+    for (int i = 1; i <= seq_len; i++) {
+        position_ids.push_back(i);
+    }
+
+    std::vector<int64_t> position_ids_shape = {batch_size, seq_len};
+
+    return Ort::Value::CreateTensor<int64_t>(
+        memory_info,
+        position_ids.data(),
+        position_ids.size(),
+        position_ids_shape.data(),
+        position_ids_shape.size()
+    );
+}
+
+std::vector<Ort::Value> create_past_kv_tensors(int num_hidden_layers, int batch_size, int num_key_value_heads, int head_dim, const Ort::MemoryInfo& memory_info) {
+    std::vector<Ort::Value> past_kv_tensors;
+    std::vector<int64_t> past_kv_shape = {batch_size, num_key_value_heads, 0, head_dim};
+
+    static std::vector<std::vector<float>> past_kv_data(num_hidden_layers * 2);
+
+    for (int layer = 0; layer < num_hidden_layers; layer++) {
+        // Empty tensors for initial pass (seq_len = 0 for past)
+        int data_size = batch_size * num_key_value_heads * 0 * head_dim;
+
+        // Key tensor
+        past_kv_data[layer * 2].resize(data_size, 0.0f);
+        auto key_tensor = Ort::Value::CreateTensor<float>(
+            memory_info,
+            past_kv_data[layer * 2].data(),
+            past_kv_data[layer * 2].size(),
+            past_kv_shape.data(),
+            past_kv_shape.size()
+        );
+        past_kv_tensors.push_back(std::move(key_tensor));
+
+        // Value tensor
+        past_kv_data[layer * 2 + 1].resize(data_size, 0.0f);
+        auto value_tensor = Ort::Value::CreateTensor<float>(
+            memory_info,
+            past_kv_data[layer * 2 + 1].data(),
+            past_kv_data[layer * 2 + 1].size(),
+            past_kv_shape.data(),
+            past_kv_shape.size()
+        );
+        past_kv_tensors.push_back(std::move(value_tensor));
+    }
+
+    return past_kv_tensors;
+}
+
+template<typename T>
+void print_tensor(const Ort::Value& tensor, const std::string& name, int max_elements = 10) {
+    auto tensor_info = tensor.GetTensorTypeAndShapeInfo();
+    auto shape = tensor_info.GetShape();
+
+    std::cout << name << " tensor: shape [";
+    for (size_t i = 0; i < shape.size(); i++) {
+        std::cout << shape[i];
+        if (i < shape.size() - 1) std::cout << ", ";
+    }
+    std::cout << "], data: ";
+
+    const T* data = tensor.GetTensorData<T>();
+    size_t total_elements = 1;
+    for (auto dim : shape) {
+        total_elements *= dim;
+    }
+
+    std::cout << "[";
+    if (total_elements <= max_elements) {
+        for (size_t i = 0; i < total_elements; i++) {
+            std::cout << data[i];
+            if (i < total_elements - 1) std::cout << ", ";
+        }
+    } else {
+        // Print first few elements
+        for (int i = 0; i < max_elements / 2; i++) {
+            std::cout << data[i] << ", ";
+        }
+        std::cout << "..., ";
+        // Print last few elements
+        for (size_t i = total_elements - max_elements / 2; i < total_elements; i++) {
+            std::cout << data[i];
+            if (i < total_elements - 1) std::cout << ", ";
+        }
+    }
+    std::cout << "]" << std::endl;
+}
+
 int main() {
     std::cout << "Problem 1: LLM Text Generation" << std::endl;
 
@@ -208,12 +314,39 @@ int main() {
     }
     std::cout << std::endl;
 
+    // Prepare decoder inputs
+    int batch_size = 1;
+    int seq_len = input_ids.size();
+
+    std::cout << "Batch size: " << batch_size << std::endl;
+    std::cout << "Sequence length: " << seq_len << std::endl;
+
     // Initialize ONNX Runtime
-    // Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
-    // Ort::SessionOptions session_options;
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
+    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+    // Create ONNX tensors
+    auto input_ids_tensor = create_input_ids_tensor(input_ids, batch_size, memory_info);
+    auto position_ids_tensor = create_position_ids_tensor(seq_len, batch_size, memory_info);
+    auto past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
+
+    std::cout << "ONNX tensors created successfully:" << std::endl;
+
+    // Print tensors
+    print_tensor<int64_t>(input_ids_tensor, "input_ids");
+    print_tensor<int64_t>(position_ids_tensor, "position_ids");
+
+    std::cout << "past_key_values: " << past_kv_tensors.size() << " tensors created" << std::endl;
+    for (size_t i = 0; i < past_kv_tensors.size(); i++) {
+        int layer = i / 2;
+        std::string kv_type = (i % 2 == 0) ? "key" : "value";
+        std::string tensor_name = "past_key_values." + std::to_string(layer) + "." + kv_type;
+        print_tensor<float>(past_kv_tensors[i], tensor_name);
+    }
 
     // // Load ONNX model
     // std::string model_path = path_to_model + "/q4f16.onnx";
+    // Ort::SessionOptions session_options;
     // Ort::Session decoder_session(env, model_path.c_str(), session_options);
 
     // std::cout << "ONNX model loaded successfully: " << model_path << std::endl;
