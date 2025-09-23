@@ -509,7 +509,11 @@ int main() {
 
         // Streaming output (decode single token)
         std::string token_text = tokenizer.decode(next_token_id);
-        std::cout << token_text << std::flush;
+
+        // Filter out special tokens from streaming output
+        if (token_text.find("<") == std::string::npos && token_text.find(">") == std::string::npos) {
+            std::cout << token_text << std::flush;
+        }
 
         // Check for EOS token
         if (next_token_id == eos_token_id) {
@@ -544,17 +548,28 @@ int main() {
         // std::cout << "  Updated position_ids: [" << current_position_ids[0] << "]" << std::endl;
     }
 
-    // Final result
-    std::cout << "\n\nGeneration completed!" << std::endl;
-    // std::cout << "Generated tokens: ";
-    // for (int64_t token : generated_tokens) {
-    //     std::cout << token << " ";
-    // }
-    // std::cout << std::endl;
-
     // Final batch decode (like Python's tokenizer.batch_decode)
     std::string final_decoded_text = tokenizer.decode(generated_tokens);
-    std::cout << "Final decoded text: \n\"" << final_decoded_text << "\"" << std::endl;
+
+    // Escape special characters for display (like Python)
+    std::string escaped_text = final_decoded_text;
+    size_t pos = 0;
+    while ((pos = escaped_text.find('\n', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\n");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped_text.find('\t', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\t");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped_text.find('\r', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\r");
+        pos += 2;
+    }
+
+    std::cout << "[\"" << escaped_text << "\"]" << std::endl;
 
     return 0;
 }
