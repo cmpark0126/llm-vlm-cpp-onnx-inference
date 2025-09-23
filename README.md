@@ -6,6 +6,7 @@ Local 환경에서:
 docker build --platform linux/amd64 -t llm-vlm-dev .
 docker run --platform linux/amd64 -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
 exit # Docker 컨테이너 내에서
+docker stop llm-vlm-dev
 docker rm llm-vlm-dev
 ```
 
