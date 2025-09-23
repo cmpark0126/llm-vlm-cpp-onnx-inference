@@ -3,8 +3,161 @@
 #include <onnxruntime_cxx_api.h>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <sstream>
 
 using json = nlohmann::json;
+
+struct SimpleTokenizer {
+    std::string tokenizer_path;
+    json tokenizer_config;
+    std::map<std::string, int64_t> vocab;
+    std::map<int64_t, std::string> id_to_token;
+
+    SimpleTokenizer(const std::string& path) : tokenizer_path(path) {
+        // Load tokenizer config
+        std::ifstream config_file(tokenizer_path + "/tokenizer.json");
+        if (!config_file.is_open()) {
+            std::cerr << "Error: Could not load tokenizer from: " << tokenizer_path << std::endl;
+            exit(1);
+        }
+
+        config_file >> tokenizer_config;
+        config_file.close();
+
+        // Build vocab from model.vocab if exists
+        if (tokenizer_config.contains("model") && tokenizer_config["model"].contains("vocab")) {
+            std::cout << "Vocab found" << std::endl;
+            for (const auto& [key, value] : tokenizer_config["model"]["vocab"].items()) {
+                vocab[key] = value;
+                id_to_token[value] = key;
+            }
+        }
+
+        std::cout << "Tokenizer loaded with " << vocab.size() << " tokens from: " << tokenizer_path << std::endl;
+    }
+
+    std::vector<int64_t> encode(const std::vector<std::string>& text_parts) {
+        std::vector<int64_t> tokens;
+
+        for (const std::string& part : text_parts) {
+            if (vocab.find(part) != vocab.end()) {
+                tokens.push_back(vocab[part]);
+            }
+        }
+
+        return tokens;
+    }
+
+    std::string decode(const std::vector<int64_t>& tokens) {
+        std::string result;
+
+        for (int64_t token_id : tokens) {
+            if (id_to_token.find(token_id) != id_to_token.end()) {
+                result += id_to_token[token_id];
+            } else {
+                result += "<unk>";
+            }
+        }
+
+        return result;
+    }
+
+    std::map<std::string, std::vector<int64_t>> apply_chat_template(
+        const std::string& system_msg,
+        const std::string& user_msg,
+        bool add_generation_prompt = true) {
+
+        // Build prompt parts as vector<string>
+        std::vector<std::string> prompt_parts;
+
+        // Add BOS token
+        prompt_parts.push_back("<bos>");
+        prompt_parts.push_back("<start_of_turn>");
+        prompt_parts.push_back("user");
+        prompt_parts.push_back("\n");
+
+        // Break down system_msg into words
+        std::istringstream sys_stream(system_msg);
+        std::string word;
+        bool first_sys_word = true;
+        while (sys_stream >> word) {
+            // Handle periods separately
+            if (word.back() == '.') {
+                std::string word_without_period = word.substr(0, word.length() - 1);
+                if (first_sys_word) {
+                    prompt_parts.push_back(word_without_period);
+                    first_sys_word = false;
+                } else {
+                    prompt_parts.push_back("▁" + word_without_period);
+                }
+                prompt_parts.push_back(".");
+            } else {
+                if (first_sys_word) {
+                    prompt_parts.push_back(word);
+                    first_sys_word = false;
+                } else {
+                    prompt_parts.push_back("▁" + word);
+                }
+            }
+        }
+
+        prompt_parts.push_back("\n\n");
+
+        // Break down user_msg into words
+        std::istringstream user_stream(user_msg);
+        bool first_user_word = true;
+        while (user_stream >> word) {
+            // Handle periods separately
+            if (word.back() == '.') {
+                std::string word_without_period = word.substr(0, word.length() - 1);
+                if (first_user_word) {
+                    prompt_parts.push_back(word_without_period);
+                    first_user_word = false;
+                } else {
+                    prompt_parts.push_back("▁" + word_without_period);
+                }
+                prompt_parts.push_back(".");
+            } else {
+                if (first_user_word) {
+                    prompt_parts.push_back(word);
+                    first_user_word = false;
+                } else {
+                    prompt_parts.push_back("▁" + word);
+                }
+            }
+        }
+
+        prompt_parts.push_back("<end_of_turn>");
+        prompt_parts.push_back("\n");
+
+        if (add_generation_prompt) {
+            prompt_parts.push_back("<start_of_turn>");
+            prompt_parts.push_back("model");
+            prompt_parts.push_back("\n");
+        }
+
+        std::cout << "Prompt parts: ";
+        for (const auto& part : prompt_parts) {
+            std::cout << "[";
+            for (char c : part) {
+                if (c == '\n') std::cout << "\\n";
+                else if (c == '\t') std::cout << "\\t";
+                else if (c == '\r') std::cout << "\\r";
+                else std::cout << c;
+            }
+            std::cout << "] ";
+        }
+        std::cout << std::endl;
+
+        // Encode using vector<string> version
+        std::vector<int64_t> input_ids = encode(prompt_parts);
+
+        std::map<std::string, std::vector<int64_t>> result;
+        result["input_ids"] = input_ids;
+
+        return result;
+    }
+};
 
 int main() {
     std::cout << "Problem 1: LLM Text Generation" << std::endl;
@@ -42,15 +195,31 @@ int main() {
     std::cout << "  num_hidden_layers: " << num_hidden_layers << std::endl;
     std::cout << "  eos_token_id: " << eos_token_id << std::endl;
 
+    // 2. Prepare inputs
+    SimpleTokenizer tokenizer(path_to_tokenizer);
+
+    std::string system_message = "You are a helpful assistant.";
+    std::string user_message = "Write me a short poem about Machine Learning.";
+
+    // Apply tokenizer
+    auto inputs = tokenizer.apply_chat_template(system_message, user_message, true);
+
+    std::cout << "Input IDs size: " << inputs["input_ids"].size() << std::endl;
+    std::cout << "All tokens: ";
+    for (int64_t token : inputs["input_ids"]) {
+        std::cout << token << " ";
+    }
+    std::cout << std::endl;
+
     // Initialize ONNX Runtime
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
-    Ort::SessionOptions session_options;
+    // Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
+    // Ort::SessionOptions session_options;
 
-    // Load ONNX model
-    std::string model_path = path_to_model + "/q4f16.onnx";
-    Ort::Session decoder_session(env, model_path.c_str(), session_options);
+    // // Load ONNX model
+    // std::string model_path = path_to_model + "/q4f16.onnx";
+    // Ort::Session decoder_session(env, model_path.c_str(), session_options);
 
-    std::cout << "ONNX model loaded successfully: " << model_path << std::endl;
+    // std::cout << "ONNX model loaded successfully: " << model_path << std::endl;
 
     return 0;
 }
