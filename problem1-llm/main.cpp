@@ -9,7 +9,7 @@ using json = nlohmann::json;
 
 // Constants
 const int DEFAULT_BATCH_SIZE = 1;
-const int DEFAULT_MAX_NEW_TOKENS = 10;
+const int DEFAULT_MAX_NEW_TOKENS = 128;
 const int DEFAULT_PRINT_TENSOR_MAX_ELEMENTS = 10;
 const int DEFAULT_PRINT_TENSOR_MAX_ELEMENTS_EXTENDED = 20;
 const int DEFAULT_EOS_TOKEN_ID = 106; // <end_of_turn>
@@ -43,29 +43,50 @@ struct SimpleTokenizer {
         std::cout << "Tokenizer loaded with " << vocab.size() << " tokens from: " << tokenizer_path << std::endl;
     }
 
+    std::vector<int64_t> encode(const std::string& text) {
+        std::vector<int64_t> tokens;
+        if (vocab.find(text) != vocab.end()) {
+            tokens.push_back(vocab[text]);
+        }
+        return tokens;
+    }
+
     std::vector<int64_t> encode(const std::vector<std::string>& text_parts) {
         std::vector<int64_t> tokens;
-
         for (const std::string& part : text_parts) {
-            if (vocab.find(part) != vocab.end()) {
-                tokens.push_back(vocab[part]);
-            }
+            auto part_tokens = encode(part);
+            tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
         }
-
         return tokens;
+    }
+
+    std::string decode(int64_t token_id) {
+        if (id_to_token.find(token_id) != id_to_token.end()) {
+            std::string token_text = id_to_token[token_id];
+            // Replace SentencePiece underscore (▁ U+2581) with space
+            size_t pos = 0;
+            while ((pos = token_text.find("\u2581", pos)) != std::string::npos) {
+                token_text.replace(pos, 3, " "); // UTF-8 encoding of U+2581 is 3 bytes
+                pos += 1;
+            }
+            // Also handle regular underscore for fallback
+            pos = 0;
+            while ((pos = token_text.find('_', pos)) != std::string::npos) {
+                token_text.replace(pos, 1, " ");
+                pos += 1;
+            }
+            return token_text;
+        } else {
+            std::cerr << "Error: Token ID " << token_id << " not found in vocabulary!" << std::endl;
+            exit(1);
+        }
     }
 
     std::string decode(const std::vector<int64_t>& tokens) {
         std::string result;
-
         for (int64_t token_id : tokens) {
-            if (id_to_token.find(token_id) != id_to_token.end()) {
-                result += id_to_token[token_id];
-            } else {
-                result += "<unk>";
-            }
+            result += decode(token_id);
         }
-
         return result;
     }
 
@@ -145,14 +166,12 @@ struct SimpleTokenizer {
 
         std::cout << "Prompt parts: ";
         for (const auto& part : prompt_parts) {
-            std::cout << "[";
             for (char c : part) {
                 if (c == '\n') std::cout << "\\n";
                 else if (c == '\t') std::cout << "\\t";
                 else if (c == '\r') std::cout << "\\r";
                 else std::cout << c;
             }
-            std::cout << "] ";
         }
         std::cout << std::endl;
 
@@ -375,19 +394,18 @@ int main() {
     auto position_ids_tensor = create_position_ids_tensor(initial_position_ids, batch_size, memory_info);
     auto past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
 
-    std::cout << "ONNX tensors created successfully:" << std::endl;
-
     // Print tensors
-    print_tensor<int64_t>(input_ids_tensor, "input_ids");
-    print_tensor<int64_t>(position_ids_tensor, "position_ids");
+    // std::cout << "ONNX tensors created successfully:" << std::endl;
+    // print_tensor<int64_t>(input_ids_tensor, "input_ids");
+    // print_tensor<int64_t>(position_ids_tensor, "position_ids");
 
-    std::cout << "past_key_values: " << past_kv_tensors.size() << " tensors created" << std::endl;
-    for (size_t i = 0; i < past_kv_tensors.size(); i++) {
-        int layer = i / 2;
-        std::string kv_type = (i % 2 == 0) ? "key" : "value";
-        std::string tensor_name = "past_key_values." + std::to_string(layer) + "." + kv_type;
-        print_tensor<float>(past_kv_tensors[i], tensor_name);
-    }
+    // std::cout << "past_key_values: " << past_kv_tensors.size() << " tensors created" << std::endl;
+    // for (size_t i = 0; i < past_kv_tensors.size(); i++) {
+    //     int layer = i / 2;
+    //     std::string kv_type = (i % 2 == 0) ? "key" : "value";
+    //     std::string tensor_name = "past_key_values." + std::to_string(layer) + "." + kv_type;
+    //     print_tensor<float>(past_kv_tensors[i], tensor_name);
+    // }
 
     // Load ONNX model
     std::string model_path = path_to_model + "/q4f16.onnx";
@@ -402,12 +420,12 @@ int main() {
     std::vector<const char*> output_names(output_count);
     std::vector<std::string> output_names_storage(output_count);
 
-    std::cout << "Model has " << output_count << " outputs:" << std::endl;
+    // std::cout << "Model has " << output_count << " outputs:" << std::endl;
     for (size_t i = 0; i < output_count; ++i) {
         auto output_name_allocated = decoder_session.GetOutputNameAllocated(i, allocator);
         output_names_storage[i] = std::string(output_name_allocated.get());
         output_names[i] = output_names_storage[i].c_str();
-        std::cout << "  Output " << i << ": " << output_names[i] << std::endl;
+        // std::cout << "  Output " << i << ": " << output_names[i] << std::endl;
     }
 
     // Generation loop (simplified, no streaming)
@@ -436,7 +454,7 @@ int main() {
 
     // Generation loop
     for (int i = 0; i < max_new_tokens; i++) {
-        std::cout << "Generation step " << (i + 1) << "/" << max_new_tokens << std::endl;
+        // std::cout << "Generation step " << (i + 1) << "/" << max_new_tokens << std::endl;
 
         // Create tensors for current iteration
         auto current_input_ids_tensor = create_input_ids_tensor(current_input_ids, batch_size, memory_info);
@@ -458,8 +476,8 @@ int main() {
                                           output_names.data(),
                                           output_names.size());
 
-        std::cout << "  Total outputs received: " << outputs.size() << std::endl;
-        std::cout << "  Model output count: " << output_count << std::endl;
+        // std::cout << "  Total outputs received: " << outputs.size() << std::endl;
+        // std::cout << "  Model output count: " << output_count << std::endl;
 
         // Get logits and find argmax (next token)
         const float* logits_data = outputs[0].GetTensorData<float>();
@@ -484,14 +502,18 @@ int main() {
             }
         }
 
-        std::cout << "  Next token ID: " << next_token_id << " (logit: " << max_logit << ")" << std::endl;
+        // std::cout << "  Next token ID: " << next_token_id << " (logit: " << max_logit << ")" << std::endl;
 
         // Add to generated tokens
         generated_tokens.push_back(next_token_id);
 
+        // Streaming output (decode single token)
+        std::string token_text = tokenizer.decode(next_token_id);
+        std::cout << token_text << std::flush;
+
         // Check for EOS token
         if (next_token_id == eos_token_id) {
-            std::cout << "  EOS token reached, stopping generation" << std::endl;
+            std::cout << std::endl; // << "  EOS token reached, stopping generation" << std::endl;
             break;
         }
 
@@ -512,26 +534,27 @@ int main() {
                 present_kv_outputs.push_back(std::move(outputs[j]));
             }
             current_past_kv_tensors = create_past_kv_tensors_from_present(present_kv_outputs, num_hidden_layers, memory_info);
-            std::cout << "  Updated past_key_values from " << present_kv_outputs.size() << " present outputs" << std::endl;
+            // std::cout << "  Updated past_key_values from " << present_kv_outputs.size() << " present outputs" << std::endl;
         } else {
-            std::cout << "  No present_key_values in outputs, using empty past_key_values" << std::endl;
+            // std::cout << "  No present_key_values in outputs, using empty past_key_values" << std::endl;
             current_past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
         }
 
-        std::cout << "  Updated input_ids: [" << current_input_ids[0] << "]" << std::endl;
-        std::cout << "  Updated position_ids: [" << current_position_ids[0] << "]" << std::endl;
+        // std::cout << "  Updated input_ids: [" << current_input_ids[0] << "]" << std::endl;
+        // std::cout << "  Updated position_ids: [" << current_position_ids[0] << "]" << std::endl;
     }
 
     // Final result
-    std::cout << "\nGeneration completed!" << std::endl;
-    std::cout << "Generated tokens: ";
-    for (int64_t token : generated_tokens) {
-        std::cout << token << " ";
-    }
-    std::cout << std::endl;
+    std::cout << "\n\nGeneration completed!" << std::endl;
+    // std::cout << "Generated tokens: ";
+    // for (int64_t token : generated_tokens) {
+    //     std::cout << token << " ";
+    // }
+    // std::cout << std::endl;
 
-    std::string decoded_text = tokenizer.decode(generated_tokens);
-    std::cout << "Decoded text: \"" << decoded_text << "\"" << std::endl;
+    // Final batch decode (like Python's tokenizer.batch_decode)
+    std::string final_decoded_text = tokenizer.decode(generated_tokens);
+    std::cout << "Final decoded text: \n\"" << final_decoded_text << "\"" << std::endl;
 
     return 0;
 }
