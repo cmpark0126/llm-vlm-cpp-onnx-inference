@@ -4,7 +4,8 @@
 Local 환경에서:
 ```bash
 docker build --platform linux/amd64 -t llm-vlm-dev .
-docker run --platform linux/amd64 -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
+docker run --platform linux/amd64 --name llm-vlm-dev -v $(pwd):/workspace -d llm-vlm-dev sleep infinity
+docker exec -it llm-vlm-dev /bin/bash
 exit # Docker 컨테이너 내에서
 docker stop llm-vlm-dev
 docker rm llm-vlm-dev
@@ -44,4 +45,4 @@ cd problem2-static && clang-tidy -p build main.cpp && cd ..
 cd problem3-vlm && clang-tidy -p build main.cpp && cd ..
 ```
 
-**GitHub Actions**: Push/PR 시 자동으로 clang-format과 clang-tidy 검사 실행
+# TODO: O3 compile

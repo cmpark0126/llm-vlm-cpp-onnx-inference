@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     clang-format \
     clang-tidy \
+    htop \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ONNX Runtime - force x64 version
