@@ -1,0 +1,31 @@
+# Build directories
+*/build/
+build/
+
+# C++ compiled files
+*.o
+*.so
+*.a
+*.exe
+
+# Executables
+problem1_llm
+problem2_static
+problem3_vlm
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Model files
+*.onnx
+llm_vlm_onnx_sample/
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.log
