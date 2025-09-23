@@ -62,7 +62,7 @@ struct SimpleTokenizer {
         return result;
     }
 
-    std::map<std::string, std::vector<int64_t>> apply_chat_template(
+    std::vector<int64_t> apply_chat_template(
         const std::string& system_msg,
         const std::string& user_msg,
         bool add_generation_prompt = true) {
@@ -152,10 +152,7 @@ struct SimpleTokenizer {
         // Encode using vector<string> version
         std::vector<int64_t> input_ids = encode(prompt_parts);
 
-        std::map<std::string, std::vector<int64_t>> result;
-        result["input_ids"] = input_ids;
-
-        return result;
+        return input_ids;
     }
 };
 
@@ -202,11 +199,11 @@ int main() {
     std::string user_message = "Write me a short poem about Machine Learning.";
 
     // Apply tokenizer
-    auto inputs = tokenizer.apply_chat_template(system_message, user_message, true);
+    auto input_ids = tokenizer.apply_chat_template(system_message, user_message, true);
 
-    std::cout << "Input IDs size: " << inputs["input_ids"].size() << std::endl;
+    std::cout << "Input IDs size: " << input_ids.size() << std::endl;
     std::cout << "All tokens: ";
-    for (int64_t token : inputs["input_ids"]) {
+    for (int64_t token : input_ids) {
         std::cout << token << " ";
     }
     std::cout << std::endl;
