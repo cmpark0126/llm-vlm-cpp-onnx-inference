@@ -4,6 +4,8 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.cache_utils import DynamicCache
 from huggingface_hub import HfApi
 import onnx
+import onnxruntime as ort
+import numpy as np
 
 
 def load_model():
@@ -54,6 +56,116 @@ def execute_original_model(tokenizer, model, inputs):
     print("Executing original model...")
     outputs = model.generate(**inputs, max_new_tokens=128, do_sample=False)
     print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :]))
+
+
+def load_onnx_model(onnx_path):
+    """ONNX 모델 로드"""
+    print(f"Loading ONNX model from: {onnx_path}")
+    session = ort.InferenceSession(onnx_path)
+    print("✅ ONNX model loaded successfully")
+    return session
+
+
+def run_onnx_prefill(onnx_prefill_session, original_input_ids, original_attention_mask):
+    """
+    ONNX 모델을 사용한 Static prefill: 항상 128 크기로 고정된 입력 처리
+    """
+    batch_size = original_input_ids.shape[0]
+    original_seq_len = original_input_ids.shape[1]
+
+    print(f"Original input shape: {original_input_ids.shape}")
+
+    # 128 크기로 고정된 텐서 생성
+    static_input_ids = torch.zeros(
+        batch_size,
+        128,
+        dtype=original_input_ids.dtype,
+        device=original_input_ids.device,
+    )
+    static_attention_mask = torch.zeros(
+        batch_size,
+        128,
+        dtype=original_attention_mask.dtype,
+        device=original_attention_mask.device,
+    )
+
+    # 실제 토큰들을 앞쪽에 복사
+    static_input_ids[:, :original_seq_len] = original_input_ids
+    static_attention_mask[:, :original_seq_len] = original_attention_mask
+
+    # Position IDs는 항상 [1, 2, 3, ..., 128]로 고정
+    position_ids = (
+        torch.arange(1, 129, device=original_input_ids.device)
+        .unsqueeze(0)
+        .expand(batch_size, -1)
+    )
+
+    print(f"Static input shape: {static_input_ids.shape}")
+    print(f"Static attention mask: {static_attention_mask}")
+    print(f"Position IDs: [1, 2, 3, ..., 128] (fixed)")
+
+    # ONNX 입력 준비 (numpy 변환)
+    onnx_inputs = {
+        "input_ids": static_input_ids.cpu().numpy().astype(np.int64),
+        "attention_mask": static_attention_mask.cpu().numpy().astype(np.int64),
+        "position_ids": position_ids.cpu().numpy().astype(np.int64),
+    }
+
+    # ONNX 추론 실행
+    print("Running ONNX inference...")
+    onnx_outputs = onnx_prefill_session.run(None, onnx_inputs)
+
+    # 첫 번째 출력은 logits
+    logits = torch.tensor(onnx_outputs[0], device=original_input_ids.device)
+
+    # 실제 마지막 토큰 위치에서 다음 토큰 예측
+    last_token_pos = original_seq_len - 1
+    next_token_logits = logits[:, last_token_pos, :]
+    next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+
+    print(f"First generated token: {next_token.item()}")
+
+    # KV cache를 ONNX 출력에서 복원
+    print("Reconstructing KV cache from ONNX outputs...")
+
+    # 새로운 DynamicCache 생성
+    trimmed_cache = DynamicCache()
+
+    # ONNX 출력에서 KV cache 추출 (logits 다음부터)
+    num_layers = (len(onnx_outputs) - 1) // 2  # logits 제외하고 key/value 쌍 개수
+
+    for layer_idx in range(num_layers):
+        # ONNX 출력에서 key, value 가져오기 (1 + layer_idx*2, 1 + layer_idx*2 + 1)
+        key_output_idx = 1 + layer_idx * 2
+        value_output_idx = 1 + layer_idx * 2 + 1
+
+        key = torch.tensor(
+            onnx_outputs[key_output_idx], device=original_input_ids.device
+        )
+        value = torch.tensor(
+            onnx_outputs[value_output_idx], device=original_input_ids.device
+        )
+
+        # key, value: [batch, num_heads, seq_len, head_dim]
+        # seq_len 차원에서 실제 길이만큼만 자르기
+        trimmed_key = key[:, :, :original_seq_len, :]
+        trimmed_value = value[:, :, :original_seq_len, :]
+
+        # DynamicCache에 추가
+        trimmed_cache.update(trimmed_key, trimmed_value, layer_idx)
+
+    print(
+        f"Original KV cache seq_len: 128, Trimmed KV cache seq_len: {original_seq_len}"
+    )
+    print(f"Trimmed cache type: {type(trimmed_cache)}")
+    print(f"Trimmed cache length: {len(trimmed_cache)}")
+
+    # 다음 position은 original_seq_len + 1
+    next_position = torch.tensor(
+        [[original_seq_len + 1]], device=original_input_ids.device
+    )
+
+    return next_token, trimmed_cache, next_position
 
 
 def run_static_prefill(model, original_input_ids, original_attention_mask):
@@ -213,15 +325,57 @@ def execute_split_model(tokenizer, model, inputs):
     )
 
 
+def execute_onnx_split_model(tokenizer, model, inputs, onnx_prefill_session):
+    """
+    ONNX Prefill + Decode로 분리된 실행
+    """
+    print("Executing ONNX split model (ONNX prefill + PyTorch decode)...")
+
+    # 1. 입력 준비
+    input_ids = inputs["input_ids"]
+    attention_mask = inputs["attention_mask"]
+
+    print(f"Input shape: {input_ids.shape}")
+
+    # 2. ONNX Static Prefill 단계
+    print("=== ONNX STATIC PREFILL PHASE ===")
+    next_token, past_key_values, next_position = run_onnx_prefill(
+        onnx_prefill_session, input_ids, attention_mask
+    )
+
+    # 3. Decode 루프 (PyTorch 모델 사용)
+    print("=== DECODE PHASE (PyTorch) ===")
+    run_decode_loop(
+        model,
+        tokenizer,
+        next_token,
+        past_key_values,
+        next_position,
+        max_new_tokens=128,
+    )
+
+
 if __name__ == "__main__":
     tokenizer, model = load_model()
 
     inputs = prepare_inputs(tokenizer, model)
 
+    # ONNX 모델 로드
+    onnx_prefill_path = "./gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx"
+    onnx_prefill_session = load_onnx_model(onnx_prefill_path)
+
     # 기존 방식 실행
     # execute_original_model(tokenizer, model, inputs)
+    # print()
 
     print("-" * 100)
 
-    # 분리된 방식 실행
+    # PyTorch 분리된 방식 실행
     execute_split_model(tokenizer, model, inputs)
+    print()
+
+    print("-" * 100)
+
+    # ONNX 분리된 방식 실행
+    execute_onnx_split_model(tokenizer, model, inputs, onnx_prefill_session)
+    print()

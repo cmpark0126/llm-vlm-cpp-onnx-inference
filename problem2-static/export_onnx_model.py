@@ -1,3 +1,5 @@
+import os
+
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple
@@ -306,6 +308,10 @@ if __name__ == "__main__":
     static_model = StaticGemmaPrefill(model, model.config)
 
     print("Exporting to ONNX...")
+    if not os.path.exists("gemma-3-1b-it-prefill"):
+        os.makedirs("gemma-3-1b-it-prefill")
+
+    print("Exporting to ONNX...")
     export_static_gemma_prefill_to_onnx(
-        model, model.config, "gemma-3-1b-it-prefill.onnx"
+        model, model.config, "gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx"
     )
