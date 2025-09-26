@@ -46,27 +46,121 @@ struct SimpleTokenizer {
         std::cout << "Tokenizer loaded with " << vocab.size() << " tokens from: " << tokenizer_path << std::endl;
     }
 
-    std::vector<int64_t> encode(const std::string& text) {
-        std::vector<int64_t> tokens;
-        if (vocab.find(text) != vocab.end()) {
-            tokens.push_back(vocab[text]);
+    std::string preprocess(const std::string& text) {
+        // Replace spaces with SentencePiece underscore
+        std::string processed_text = text;
+        size_t space_pos = 0;
+        while ((space_pos = processed_text.find(' ', space_pos)) != std::string::npos) {
+            processed_text.replace(space_pos, 1, "▁");
+            space_pos += 3; // UTF-8 encoding of ▁ is 3 bytes
         }
+        return processed_text;
+    }
+
+    std::vector<std::string> split_by_special_tokens(const std::string& text) {
+        std::vector<std::string> segments;
+        size_t pos = 0;
+
+        while (pos < text.length()) {
+            size_t start_bracket = text.find('<', pos);
+
+            if (start_bracket == std::string::npos) {
+                // No more special tokens, add remaining text
+                if (pos < text.length()) {
+                    segments.push_back(text.substr(pos));
+                }
+                break;
+            }
+
+            // Add text before special token
+            if (start_bracket > pos) {
+                segments.push_back(text.substr(pos, start_bracket - pos));
+            }
+
+            // Find end of special token
+            size_t end_bracket = text.find('>', start_bracket);
+            if (end_bracket == std::string::npos) {
+                // No closing bracket, treat as regular text
+                segments.push_back(text.substr(start_bracket));
+                break;
+            }
+
+            // Add special token
+            std::string special_token = text.substr(start_bracket, end_bracket - start_bracket + 1);
+            segments.push_back(special_token);
+            pos = end_bracket + 1;
+        }
+
+        return segments;
+    }
+
+    std::vector<int64_t> encode_segment(const std::string& segment) {
+        std::vector<int64_t> tokens;
+
+        // If it's a special token (starts with <), try direct match first
+        if (!segment.empty() && segment[0] == '<' && segment.back() == '>') {
+            if (vocab.find(segment) != vocab.end()) {
+                std::cout << "Special token found: " << segment << std::endl;
+                tokens.push_back(vocab[segment]);
+                return tokens;
+            }
+        }
+
+        // Regular longest match for non-special tokens
+        size_t pos = 0;
+        while (pos < segment.length()) {
+            std::string longest_match;
+            int64_t longest_token_id = -1;
+
+            for (size_t len = std::min(segment.length() - pos, (size_t)100); len > 0; len--) {
+                std::string candidate = segment.substr(pos, len);
+                if (vocab.find(candidate) != vocab.end()) {
+                    std::cout << "Regular token found: " << candidate << std::endl;
+                    longest_match = candidate;
+                    longest_token_id = vocab[candidate];
+                    break;
+                }
+            }
+
+            if (longest_token_id != -1) {
+                tokens.push_back(longest_token_id);
+                pos += longest_match.length();
+            } else {
+                std::cerr << "Error: No token found at position " << pos << " in segment: " << segment << std::endl;
+                exit(1);
+            }
+        }
+
         return tokens;
     }
 
-    std::vector<int64_t> encode(const std::vector<std::string>& text_parts) {
+    std::vector<int64_t> encode(const std::string& text) {
         std::vector<int64_t> tokens;
-        for (const std::string& part : text_parts) {
-            auto part_tokens = encode(part);
-            tokens.insert(tokens.end(), part_tokens.begin(), part_tokens.end());
+
+        // Split text by special tokens
+        auto segments = split_by_special_tokens(text);
+
+        // Encode each segment
+        for (const auto& segment : segments) {
+            if (!segment.empty()) {
+                auto segment_tokens = encode_segment(segment);
+                tokens.insert(tokens.end(), segment_tokens.begin(), segment_tokens.end());
+            }
         }
+
         return tokens;
     }
 
     std::string decode(int64_t token_id) {
         if (id_to_token.find(token_id) != id_to_token.end()) {
             std::string token_text = id_to_token[token_id];
-            // Replace SentencePiece underscore (▁ U+2581) with space
+
+            // Don't process underscores if it's a special token (starts and ends with <>)
+            if (!token_text.empty() && token_text[0] == '<' && token_text.back() == '>') {
+                return token_text;
+            }
+
+            // Replace SentencePiece underscore (▁ U+2581) with space for regular tokens
             size_t pos = 0;
             while ((pos = token_text.find("\u2581", pos)) != std::string::npos) {
                 token_text.replace(pos, 3, " "); // UTF-8 encoding of U+2581 is 3 bytes
@@ -93,97 +187,28 @@ struct SimpleTokenizer {
         return result;
     }
 
-    std::vector<int64_t> apply_chat_template(
-        const std::string& system_msg,
-        const std::string& user_msg,
-        bool add_generation_prompt = true) {
 
-        // Build prompt parts as vector<string>
-        std::vector<std::string> prompt_parts;
-
-        // Add BOS token
-        prompt_parts.push_back("<bos>");
-        prompt_parts.push_back("<start_of_turn>");
-        prompt_parts.push_back("user");
-        prompt_parts.push_back("\n");
-
-        // Break down system_msg into words
-        std::istringstream sys_stream(system_msg);
-        std::string word;
-        bool first_sys_word = true;
-        while (sys_stream >> word) {
-            // Handle periods separately
-            if (word.back() == '.') {
-                std::string word_without_period = word.substr(0, word.length() - 1);
-                if (first_sys_word) {
-                    prompt_parts.push_back(word_without_period);
-                    first_sys_word = false;
-                } else {
-                    prompt_parts.push_back("▁" + word_without_period);
-                }
-                prompt_parts.push_back(".");
-            } else {
-                if (first_sys_word) {
-                    prompt_parts.push_back(word);
-                    first_sys_word = false;
-                } else {
-                    prompt_parts.push_back("▁" + word);
-                }
-            }
-        }
-
-        prompt_parts.push_back("\n\n");
-
-        // Break down user_msg into words
-        std::istringstream user_stream(user_msg);
-        bool first_user_word = true;
-        while (user_stream >> word) {
-            // Handle periods separately
-            if (word.back() == '.') {
-                std::string word_without_period = word.substr(0, word.length() - 1);
-                if (first_user_word) {
-                    prompt_parts.push_back(word_without_period);
-                    first_user_word = false;
-                } else {
-                    prompt_parts.push_back("▁" + word_without_period);
-                }
-                prompt_parts.push_back(".");
-            } else {
-                if (first_user_word) {
-                    prompt_parts.push_back(word);
-                    first_user_word = false;
-                } else {
-                    prompt_parts.push_back("▁" + word);
-                }
-            }
-        }
-
-        prompt_parts.push_back("<end_of_turn>");
-        prompt_parts.push_back("\n");
-
-        if (add_generation_prompt) {
-            prompt_parts.push_back("<start_of_turn>");
-            prompt_parts.push_back("model");
-            prompt_parts.push_back("\n");
-        }
-
-        std::cout << "Prompt parts: ";
-        for (const auto& part : prompt_parts) {
-            for (char c : part) {
-                if (c == '\n') std::cout << "\\n";
-                else if (c == '\t') std::cout << "\\t";
-                else if (c == '\r') std::cout << "\\r";
-                else std::cout << c;
-            }
-        }
-        std::cout << std::endl;
-
-        // Encode using vector<string> version
-        std::vector<int64_t> input_ids = encode(prompt_parts);
-
-        return input_ids;
-    }
 };
+
+std::string escape_special_chars(const std::string& text) {
+    std::string escaped_text = text;
+    size_t pos = 0;
+    while ((pos = escaped_text.find('\n', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\n");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped_text.find('\t', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\t");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped_text.find('\r', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\r");
+        pos += 2;
+    }
+    return escaped_text;
+}
 
 Ort::Value create_input_ids_tensor(const std::vector<int64_t>& input_ids, int batch_size, const Ort::MemoryInfo& memory_info) {
     int seq_len = input_ids.size();
@@ -378,13 +403,25 @@ int main() {
     // 2. Prepare inputs
     SimpleTokenizer tokenizer(path_to_tokenizer);
 
-    std::string system_message = "You are a helpful assistant.";
-    std::string user_message = "Write me a short poem about Machine Learning.";
+    std::string prompt = "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
+
+    // Preprocess prompt
+    std::string preprocessed_prompt = tokenizer.preprocess(prompt);
 
     // Apply tokenizer
-    auto input_ids = tokenizer.apply_chat_template(system_message, user_message, true);
+    auto input_ids = tokenizer.encode(preprocessed_prompt);
 
-    std::cout << "Input IDs size: " << input_ids.size() << std::endl;
+    // Verify encoding by decoding and comparing with preprocessed prompt
+    std::string decoded_prompt = tokenizer.decode(input_ids);
+    std::cout << "Original prompt: \"" << escape_special_chars(prompt) << "\"" << std::endl;
+    std::cout << "Decoded prompt: \"" << escape_special_chars(decoded_prompt) << "\"" << std::endl;
+
+    if (decoded_prompt == preprocessed_prompt) {
+        std::cout << "✓ Encode/Decode verification passed" << std::endl;
+    } else {
+        std::cout << "✗ Encode/Decode verification failed!" << std::endl;
+    }
+
     std::cout << "All tokens: ";
     for (int64_t token : input_ids) {
         std::cout << token << " ";
@@ -588,25 +625,7 @@ int main() {
 
     // Final batch decode (like Python's tokenizer.batch_decode)
     std::string final_decoded_text = tokenizer.decode(generated_tokens);
-
-    // Escape special characters for display (like Python)
-    std::string escaped_text = final_decoded_text;
-    size_t pos = 0;
-    while ((pos = escaped_text.find('\n', pos)) != std::string::npos) {
-        escaped_text.replace(pos, 1, "\\n");
-        pos += 2;
-    }
-    pos = 0;
-    while ((pos = escaped_text.find('\t', pos)) != std::string::npos) {
-        escaped_text.replace(pos, 1, "\\t");
-        pos += 2;
-    }
-    pos = 0;
-    while ((pos = escaped_text.find('\r', pos)) != std::string::npos) {
-        escaped_text.replace(pos, 1, "\\r");
-        pos += 2;
-    }
-
+    std::string escaped_text = escape_special_chars(final_decoded_text);
     std::cout << "[\"" << escaped_text << "\"]" << std::endl;
 
     // Performance measurements
