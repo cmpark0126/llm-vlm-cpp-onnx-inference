@@ -4,9 +4,9 @@
 Local 환경에서:
 ```bash
 docker build -t llm-vlm-dev .
-docker run --name llm-vlm-dev -v $(pwd):/workspace -d llm-vlm-dev sleep infinity
+docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -d llm-vlm-dev sleep infinity
 docker exec -it llm-vlm-dev /bin/bash
-.venv/bin/activate # Docker 컨테이너 내에서
+. .venv/bin/activate # Docker 컨테이너 내에서
 ...
 exit # Docker 컨테이너 내에서
 docker stop llm-vlm-dev && docker rm llm-vlm-dev

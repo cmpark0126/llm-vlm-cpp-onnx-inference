@@ -1,0 +1,19 @@
+# HuggingFace 모델 캐시
+gemma-3-1b-it/
+
+# ONNX 모델 파일들
+*.onnx
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# 가상환경
+.venv/
+env/
+.env
+
+# 시스템 파일
+.DS_Store
+Thumbs.db
