@@ -21,17 +21,25 @@ git lfs pull
 python3 run_llm.py
 ```
 
-## 실행 방법
+## 실행 방법 (TODO: O3 compile)
 Docker 컨테이너 내에서:
 ```bash
 # 문제 1: LLM 텍스트 생성
-cd problem1-llm && ./run.sh && cd ..
+cd problem1-llm
+./run.sh
+cd ..
 
 # 문제 2: Static graph export & 텍스트 생성
-cd problem2-static && ./run.sh && cd ..
+cd problem2-static
+hf auth login
+python export_onnx.py
+./run.sh
+cd ..
 
 # 문제 3: VLM 텍스트 생성
-cd problem3-vlm && ./run.sh && cd ..
+cd problem3-vlm
+./run.sh
+cd ..
 ```
 
 ## 코드 품질 관리
@@ -46,4 +54,9 @@ cd problem2-static && clang-tidy -p build main.cpp && cd ..
 cd problem3-vlm && clang-tidy -p build main.cpp && cd ..
 ```
 
-# TODO: O3 compile
+## 기타
+Docker 컨테이너 내에서:
+```bash
+# python package 업데이트 적용
+pip freeze > requirements.txt
+```
