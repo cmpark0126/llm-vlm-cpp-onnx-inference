@@ -4,6 +4,9 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <chrono>
+#include <sys/resource.h>
+#include <unistd.h>
 
 using json = nlohmann::json;
 
@@ -281,6 +284,22 @@ std::vector<Ort::Value> create_past_kv_tensors_from_present(const std::vector<Or
     return past_kv_tensors;
 }
 
+static int64_t get_time_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+}
+
+size_t get_peak_memory_usage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    // ru_maxrss is in kilobytes on Linux, bytes on macOS
+    #ifdef __APPLE__
+        return usage.ru_maxrss; // bytes
+    #else
+        return usage.ru_maxrss * 1024; // convert KB to bytes
+    #endif
+}
+
 template<typename T>
 void print_tensor(const Ort::Value& tensor, const std::string& name, int max_elements = DEFAULT_PRINT_TENSOR_MAX_ELEMENTS) {
     auto tensor_info = tensor.GetTensorTypeAndShapeInfo();
@@ -428,9 +447,14 @@ int main() {
         // std::cout << "  Output " << i << ": " << output_names[i] << std::endl;
     }
 
-    // Generation loop (simplified, no streaming)
+    // Generation loop with performance measurements
     int max_new_tokens = DEFAULT_MAX_NEW_TOKENS;
     std::vector<int64_t> generated_tokens;
+
+    // Performance measurement variables
+    int64_t first_token_time_ms = 0;
+    std::vector<double> token_times_ms;
+    bool first_token_generated = false;
 
     // Prepare input names
     std::vector<const char*> input_names = {"input_ids", "position_ids"};
@@ -452,8 +476,11 @@ int main() {
     }
     std::vector<Ort::Value> current_past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
 
-    // Generation loop
+    // Generation loop - start timing here
+    int64_t generation_start_ms = get_time_ms();
+
     for (int i = 0; i < max_new_tokens; i++) {
+        int64_t token_start_ms = get_time_ms();
         // std::cout << "Generation step " << (i + 1) << "/" << max_new_tokens << std::endl;
 
         // Create tensors for current iteration
@@ -506,6 +533,17 @@ int main() {
 
         // Add to generated tokens
         generated_tokens.push_back(next_token_id);
+
+        // Measure token generation time
+        int64_t token_end_ms = get_time_ms();
+        double token_duration_ms = token_end_ms - token_start_ms;
+        token_times_ms.push_back(token_duration_ms);
+
+        // Record first token time (TTFT)
+        if (!first_token_generated) {
+            first_token_time_ms = token_end_ms;
+            first_token_generated = true;
+        }
 
         // Streaming output (decode single token)
         std::string token_text = tokenizer.decode(next_token_id);
@@ -570,6 +608,31 @@ int main() {
     }
 
     std::cout << "[\"" << escaped_text << "\"]" << std::endl;
+
+    // Performance measurements
+    int64_t generation_end_ms = get_time_ms();
+    double total_generation_time_ms = generation_end_ms - generation_start_ms;
+
+    // Calculate TTFT (Time-to-First-Token)
+    double ttft_ms = first_token_time_ms - generation_start_ms;
+
+    // Calculate TPOT (Time-Per-Output-Token) - average of all tokens except first
+    double total_subsequent_time = 0.0;
+    for (size_t i = 1; i < token_times_ms.size(); i++) {
+        total_subsequent_time += token_times_ms[i];
+    }
+    double tpot_ms = token_times_ms.size() > 1 ? total_subsequent_time / (token_times_ms.size() - 1) : 0.0;
+
+    // Get peak memory usage
+    size_t peak_memory = get_peak_memory_usage();
+
+    // Print performance metrics
+    std::cout << "\n=== Performance Metrics ===" << std::endl;
+    std::cout << "Time-to-First-Token (TTFT): " << ttft_ms << " ms" << std::endl;
+    std::cout << "Time-Per-Output-Token (TPOT): " << tpot_ms << " ms" << std::endl;
+    std::cout << "Peak Memory Usage: " << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "Total Generation Time: " << total_generation_time_ms << " ms" << std::endl;
+    std::cout << "Total Tokens Generated: " << generated_tokens.size() << std::endl;
 
     return 0;
 }
