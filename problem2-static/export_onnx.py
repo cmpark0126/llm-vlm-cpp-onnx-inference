@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers.cache_utils import DynamicCache
 from huggingface_hub import HfApi
 import onnx
 
@@ -55,43 +56,89 @@ def execute_original_model(tokenizer, model, inputs):
     print(tokenizer.decode(outputs[0][inputs["input_ids"].shape[-1] :]))
 
 
-def run_prefill(model, input_ids, attention_mask):
+def run_static_prefill(model, original_input_ids, original_attention_mask):
     """
-    전체 입력 시퀀스를 한 번에 처리하고 KV cache 생성
+    Static prefill: 항상 128 크기로 고정된 입력 처리
     """
-    print(f"Prefill input shape: {input_ids.shape}")
-    print(f"Attention mask shape: {attention_mask.shape}")
+    batch_size = original_input_ids.shape[0]
+    original_seq_len = original_input_ids.shape[1]
 
-    # Position IDs 생성 (1부터 시작)
-    batch_size, seq_len = input_ids.shape
+    print(f"Original input shape: {original_input_ids.shape}")
+
+    # 128 크기로 고정된 텐서 생성
+    static_input_ids = torch.zeros(
+        batch_size,
+        128,
+        dtype=original_input_ids.dtype,
+        device=original_input_ids.device,
+    )
+    static_attention_mask = torch.zeros(
+        batch_size,
+        128,
+        dtype=original_attention_mask.dtype,
+        device=original_attention_mask.device,
+    )
+
+    # 실제 토큰들을 앞쪽에 복사
+    static_input_ids[:, :original_seq_len] = original_input_ids
+    static_attention_mask[:, :original_seq_len] = original_attention_mask
+
+    # Position IDs는 항상 [1, 2, 3, ..., 128]로 고정
     position_ids = (
-        torch.arange(1, seq_len + 1, device=input_ids.device)
+        torch.arange(1, 129, device=original_input_ids.device)
         .unsqueeze(0)
         .expand(batch_size, -1)
     )
-    print(f"Position IDs shape: {position_ids.shape}, values: {position_ids}")
+
+    print(f"Static input shape: {static_input_ids.shape}")
+    print(f"Static attention mask: {static_attention_mask}")
+    print(f"Position IDs: [1, 2, 3, ..., 128] (fixed)")
 
     with torch.no_grad():
-        # past_key_values=None으로 prefill 실행
         outputs = model(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            position_ids=position_ids,  # Position IDs 추가
-            past_key_values=None,  # 처음 시작이므로 None
-            use_cache=True,  # KV cache 생성
+            input_ids=static_input_ids,
+            attention_mask=static_attention_mask,
+            position_ids=position_ids,
+            past_key_values=None,
+            use_cache=True,
             return_dict=True,
         )
 
-    # 마지막 토큰의 logits로 다음 토큰 예측 (Greedy 강제)
-    next_token_logits = outputs.logits[:, -1, :]
+    # 실제 마지막 토큰 위치에서 다음 토큰 예측
+    last_token_pos = original_seq_len - 1
+    next_token_logits = outputs.logits[:, last_token_pos, :]
     next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
 
     print(f"First generated token: {next_token.item()}")
 
-    # 다음 position은 seq_len + 1이 됨
-    next_position = torch.tensor([[seq_len + 1]], device=input_ids.device)
+    # KV cache를 실제 사용된 길이만큼 잘라내기
+    print(f"past_key_values type: {type(outputs.past_key_values)}")
 
-    return next_token, outputs.past_key_values, attention_mask, next_position
+    # 새로운 DynamicCache 생성
+    trimmed_cache = DynamicCache()
+
+    for layer_idx in range(len(outputs.past_key_values)):
+        key, value = outputs.past_key_values[layer_idx]
+        # key, value: [batch, num_heads, seq_len, head_dim]
+        # seq_len 차원에서 실제 길이만큼만 자르기
+        trimmed_key = key[:, :, :original_seq_len, :]
+        trimmed_value = value[:, :, :original_seq_len, :]
+
+        # DynamicCache에 추가
+        trimmed_cache.update(trimmed_key, trimmed_value, layer_idx)
+
+    print(
+        f"Original KV cache seq_len: 128, Trimmed KV cache seq_len: {original_seq_len}"
+    )
+    print(f"Trimmed cache type: {type(trimmed_cache)}")
+    print(f"Trimmed cache length: {len(trimmed_cache)}")
+
+    # 다음 position은 original_seq_len + 1
+    next_position = torch.tensor(
+        [[original_seq_len + 1]], device=original_input_ids.device
+    )
+
+    return next_token, trimmed_cache, next_position
 
 
 def run_decode_loop(
@@ -99,33 +146,21 @@ def run_decode_loop(
     tokenizer,
     next_token,
     past_key_values,
-    attention_mask,
     next_position,
     max_new_tokens,
 ):
     """
     한 토큰씩 순차적으로 생성
     """
-    generated_tokens = [next_token]
-
     print("Starting decode loop...")
     print(tokenizer.decode(next_token.item()), end="", flush=True)
-    for i in range(max_new_tokens - 1):  # -1은 첫 토큰이 이미 생성되었기 때문
-        # Attention mask를 새로운 토큰에 맞게 확장
-        new_attention = torch.ones(
-            1, 1, dtype=attention_mask.dtype, device=attention_mask.device
-        )
-        attention_mask = torch.cat([attention_mask, new_attention], dim=-1)
-
-        # print(f"Decode step {i+1}: position_ids = {next_position}")
-
+    for i in range(max_new_tokens - 1):
         with torch.no_grad():
-            # 단일 토큰 입력으로 decode 실행
+            # 단일 토큰 입력으로 decode 실행 (attention_mask 없이)
             outputs = model(
                 input_ids=next_token,
-                attention_mask=attention_mask,  # 확장된 attention mask 사용
-                position_ids=next_position,  # Position IDs 추가
-                past_key_values=past_key_values,  # 이전 KV cache 재사용
+                position_ids=next_position,
+                past_key_values=past_key_values,
                 use_cache=True,
                 return_dict=True,
             )
@@ -160,9 +195,9 @@ def execute_split_model(tokenizer, model, inputs):
 
     print(f"Input shape: {input_ids.shape}")
 
-    # 2. Prefill 단계
-    print("=== PREFILL PHASE ===")
-    next_token, past_key_values, attention_mask, next_position = run_prefill(
+    # 2. Static Prefill 단계
+    print("=== STATIC PREFILL PHASE ===")
+    next_token, past_key_values, next_position = run_static_prefill(
         model, input_ids, attention_mask
     )
 
@@ -173,7 +208,6 @@ def execute_split_model(tokenizer, model, inputs):
         tokenizer,
         next_token,
         past_key_values,
-        attention_mask,
         next_position,
         max_new_tokens=128,
     )
