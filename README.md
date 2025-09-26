@@ -32,7 +32,7 @@ cd ..
 # 문제 2: Static graph export & 텍스트 생성
 cd problem2-static
 hf auth login
-python export_onnx.py
+python3 export_onnx.py
 ./run.sh
 cd ..
 
