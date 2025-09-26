@@ -3,11 +3,14 @@
 ## Docker 개발 & 실행 환경
 Local 환경에서:
 ```bash
-docker build --platform linux/amd64 -t llm-vlm-dev .
-docker run --platform linux/amd64 -it --name llm-vlm-dev -v $(pwd):/workspace llm-vlm-dev
+docker build -t llm-vlm-dev .
+docker run --name llm-vlm-dev -v $(pwd):/workspace -d llm-vlm-dev sleep infinity
+docker exec -it llm-vlm-dev /bin/bash
 exit # Docker 컨테이너 내에서
-docker rm llm-vlm-dev
+docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ```
+
+**참고**: Dockerfile은 자동으로 현재 아키텍처(x86_64 또는 aarch64)에 맞는 ONNX Runtime을 설치합니다.
 
 ## 베이스라인
 Docker 컨테이너 내에서:
@@ -43,4 +46,4 @@ cd problem2-static && clang-tidy -p build main.cpp && cd ..
 cd problem3-vlm && clang-tidy -p build main.cpp && cd ..
 ```
 
-**GitHub Actions**: Push/PR 시 자동으로 clang-format과 clang-tidy 검사 실행
+# TODO: O3 compile
