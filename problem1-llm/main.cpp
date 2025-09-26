@@ -317,12 +317,8 @@ static int64_t get_time_ms() {
 size_t get_peak_memory_usage() {
     struct rusage usage;
     getrusage(RUSAGE_SELF, &usage);
-    // ru_maxrss is in kilobytes on Linux, bytes on macOS
-    #ifdef __APPLE__
-        return usage.ru_maxrss; // bytes
-    #else
-        return usage.ru_maxrss * 1024; // convert KB to bytes
-    #endif
+    // ru_maxrss is in kilobytes on Linux
+    return usage.ru_maxrss * 1024; // convert KB to bytes
 }
 
 template<typename T>
