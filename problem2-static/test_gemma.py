@@ -351,13 +351,8 @@ def run_onnx_decode_loop(
                 key_idx = layer_idx * 2
                 value_idx = layer_idx * 2 + 1
 
-                for i in range(1024):
-                    print(f"{i}th kv")
-                    onnx_inputs[f"past.{layer_idx}.key"] = past_key_values[key_idx]
-                    print(f"{past_key_values[key_idx][0, 0, i, :].sum()}")
-                    onnx_inputs[f"past.{layer_idx}.value"] = past_key_values[value_idx]
-                    print(f"{past_key_values[value_idx][0, 0, i, :].sum()}")
-                exit(1)
+                onnx_inputs[f"past.{layer_idx}.key"] = past_key_values[key_idx]
+                onnx_inputs[f"past.{layer_idx}.value"] = past_key_values[value_idx]
 
         # ONNX 추론 실행
         onnx_outputs = onnx_decode_session.run(None, onnx_inputs)
@@ -677,6 +672,6 @@ if __name__ == "__main__":
 
     print("-" * 100)
 
-    # # ONNX 분리된 방식 실행
-    # execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
-    # print()
+    # ONNX 분리된 방식 실행
+    execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
+    print()
