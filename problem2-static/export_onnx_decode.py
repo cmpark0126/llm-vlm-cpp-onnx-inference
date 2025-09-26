@@ -28,13 +28,25 @@ class TempCache:
         # 기존 cache의 current_length 위치에 새로운 key/value 추가
         batch_size, num_heads, _, head_dim = key_states.shape
 
+        # print(f"key_states: {key_states.sum()}")
+        # print(f"value_states: {value_states.sum()}")
+
+        new_key_states = self.key_states.clone()
+        new_value_states = self.value_states.clone()
+
         # current_length 위치에 새로운 key/value 추가
-        self.key_states[:, :, self.current_length : self.current_length + 1, :] = (
+        new_key_states[:, :, self.current_length, :] = (
             key_states
         )
-        self.value_states[:, :, self.current_length : self.current_length + 1, :] = (
+        new_value_states[:, :, self.current_length, :] = (
             value_states
         )
+
+        self.key_states = new_key_states
+        self.value_states = new_value_states
+
+        # print(f"self.key_states: {self.key_states[:, :, self.current_length, :].sum()}")
+        # print(f"self.value_states: {self.value_states[:, :, self.current_length, :].sum()}")
 
         return self.key_states, self.value_states
 

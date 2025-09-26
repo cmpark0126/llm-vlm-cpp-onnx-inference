@@ -7,6 +7,9 @@ import onnx
 import onnxruntime as ort
 import numpy as np
 
+from export_onnx_prefill import StaticGemmaPrefill
+from export_onnx_decode import StaticGemmaDecode
+
 
 def load_model():
     # HuggingFace 인증 확인
@@ -410,6 +413,210 @@ def execute_split_model(tokenizer, model, inputs):
     )
 
 
+def execute_pytorch_static_split_model(tokenizer, model, inputs):
+    """
+    PyTorch Static Prefill + PyTorch Static Decode로 분리된 실행
+    """
+    print("Executing PyTorch static split model (PyTorch static prefill + PyTorch static decode)...")
+
+    # 1. 입력 준비
+    input_ids = inputs["input_ids"]
+    attention_mask = inputs["attention_mask"]
+
+    print(f"Input shape: {input_ids.shape}")
+
+    # 2. PyTorch Static Prefill 단계
+    print("=== PYTORCH STATIC PREFILL PHASE ===")
+    next_token, past_key_values, next_position = run_pytorch_static_prefill(
+        model, input_ids, attention_mask
+    )
+
+    # 3. PyTorch Static Decode 루프
+    print("=== PYTORCH STATIC DECODE PHASE ===")
+    run_pytorch_static_decode_loop(
+        model,
+        tokenizer,
+        next_token,
+        past_key_values,
+        next_position,
+        max_new_tokens=128,
+    )
+
+
+def run_pytorch_static_prefill(model, original_input_ids, original_attention_mask):
+    """
+    PyTorch Static prefill: StaticGemmaPrefill 클래스 사용
+    """
+    batch_size = original_input_ids.shape[0]
+    original_seq_len = original_input_ids.shape[1]
+
+    print(f"Original input shape: {original_input_ids.shape}")
+
+    # StaticGemmaPrefill 모델 생성
+    static_prefill_model = StaticGemmaPrefill(model, model.config)
+    static_prefill_model.eval()
+
+    # 128 크기로 고정된 텐서 생성
+    static_input_ids = torch.zeros(
+        batch_size,
+        128,
+        dtype=original_input_ids.dtype,
+        device=original_input_ids.device,
+    )
+    static_attention_mask = torch.zeros(
+        batch_size,
+        128,
+        dtype=original_attention_mask.dtype,
+        device=original_attention_mask.device,
+    )
+
+    # 실제 토큰들을 앞쪽에 복사
+    static_input_ids[:, :original_seq_len] = original_input_ids
+    static_attention_mask[:, :original_seq_len] = original_attention_mask
+
+    # Position IDs는 항상 [1, 2, 3, ..., 128]로 고정
+    position_ids = (
+        torch.arange(1, 129, device=original_input_ids.device)
+        .unsqueeze(0)
+        .expand(batch_size, -1)
+    )
+
+    print(f"Static input shape: {static_input_ids.shape}")
+
+    with torch.no_grad():
+        outputs = static_prefill_model(
+            input_ids=static_input_ids,
+            attention_mask=static_attention_mask,
+            position_ids=position_ids,
+        )
+
+    # outputs는 tuple: (logits, present.0.key, present.0.value, ...)
+    logits = outputs[0]
+
+    # 실제 마지막 토큰 위치에서 다음 토큰 예측
+    last_token_pos = original_seq_len - 1
+    next_token_logits = logits[:, last_token_pos, :]
+    next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+
+    print(f"First generated token: {next_token.item()}")
+
+    # KV cache를 static 출력에서 복원
+    print("Reconstructing KV cache from static outputs...")
+
+    # 새로운 DynamicCache 생성
+    trimmed_cache = DynamicCache()
+
+    # Static 출력에서 KV cache 추출 (logits 다음부터)
+    num_layers = (len(outputs) - 1) // 2  # logits 제외하고 key/value 쌍 개수
+
+    for layer_idx in range(num_layers):
+        # Static 출력에서 key, value 가져오기 (1 + layer_idx*2, 1 + layer_idx*2 + 1)
+        key_output_idx = 1 + layer_idx * 2
+        value_output_idx = 1 + layer_idx * 2 + 1
+
+        key = outputs[key_output_idx]
+        value = outputs[value_output_idx]
+
+        # key, value: [batch, num_heads, seq_len, head_dim]
+        # seq_len 차원에서 실제 길이만큼만 자르기
+        trimmed_key = key[:, :, :original_seq_len, :]
+        trimmed_value = value[:, :, :original_seq_len, :]
+
+        # DynamicCache에 추가
+        trimmed_cache.update(trimmed_key, trimmed_value, layer_idx)
+
+    print(
+        f"Original KV cache seq_len: 128, Trimmed KV cache seq_len: {original_seq_len}"
+    )
+    print(f"Trimmed cache type: {type(trimmed_cache)}")
+    print(f"Trimmed cache length: {len(trimmed_cache)}")
+
+    # 다음 position은 original_seq_len + 1
+    next_position = torch.tensor(
+        [[original_seq_len + 1]], device=original_input_ids.device
+    )
+
+    return next_token, trimmed_cache, next_position
+
+
+def run_pytorch_static_decode_loop(
+    model,
+    tokenizer,
+    next_token,
+    past_key_values,
+    next_position,
+    max_new_tokens,
+):
+    """
+    PyTorch StaticGemmaDecode 모델을 사용한 한 토큰씩 순차적으로 생성
+    """
+    # StaticGemmaDecode 모델 생성
+    static_decode_model = StaticGemmaDecode(model, model.config)
+    static_decode_model.eval()
+
+    print("Starting PyTorch static decode loop...")
+    print(tokenizer.decode(next_token.item()), end="", flush=True)
+
+    for i in range(max_new_tokens - 1):
+        current_pos = next_position.item()
+
+        # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
+        attention_mask = torch.zeros(1, 1024, dtype=torch.long)
+        attention_mask[0, :current_pos] = 1  # 현재 위치까지만 유효
+
+        # 과거 KV cache를 1024 크기로 패딩
+        static_past_kv = []
+        if isinstance(past_key_values, DynamicCache):
+            # 첫 번째 iteration: DynamicCache에서 가져와서 1024로 패딩
+            for layer_idx in range(len(past_key_values)):
+                key, value = past_key_values[layer_idx]
+
+                # 1024 크기로 패딩된 KV cache 생성
+                padded_key = torch.zeros(1, key.shape[1], 1024, key.shape[3], dtype=key.dtype)
+                padded_value = torch.zeros(1, value.shape[1], 1024, value.shape[3], dtype=value.dtype)
+
+                # 기존 cache를 앞부분에 복사
+                seq_len = key.shape[2]
+                padded_key[:, :, :seq_len, :] = key
+                padded_value[:, :, :seq_len, :] = value
+
+                static_past_kv.extend([padded_key, padded_value])
+
+                assert seq_len + 1 == current_pos, f"seq_len: {seq_len}, current_pos: {current_pos}"
+        else:
+            # 이후 iteration: 이미 1024 크기인 텐서들을 바로 사용
+            static_past_kv = list(past_key_values)
+
+        with torch.no_grad():
+            # StaticGemmaDecode 실행
+            outputs = static_decode_model(
+                next_token,
+                next_position,
+                attention_mask,
+                *static_past_kv
+            )
+
+        # 로짓에서 다음 토큰 예측
+        logits = outputs[0]
+        next_token_logits = logits[:, -1, :]
+        next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+
+        # Position ID 업데이트
+        next_position = next_position + 1
+
+        # EOS 토큰 체크
+        eos_token_ids = [1, 106]
+        if next_token.item() in eos_token_ids:
+            break
+
+        # KV cache 업데이트 - Static 출력을 바로 사용
+        # Static 출력의 present KV cache를 다음 iteration의 past로 사용
+        past_key_values = outputs[1:]  # 첫 번째는 logits, 나머지는 present KV cache
+
+        # 스트리밍 출력
+        print(tokenizer.decode(next_token[0]), end="", flush=True)
+
+
 def execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session):
     """
     ONNX Prefill + ONNX Decode로 분리된 실행
@@ -464,6 +671,12 @@ if __name__ == "__main__":
 
     print("-" * 100)
 
-    # ONNX 분리된 방식 실행
-    execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
+    # PyTorch Static 분리된 방식 실행
+    execute_pytorch_static_split_model(tokenizer, model, inputs)
     print()
+
+    print("-" * 100)
+
+    # # ONNX 분리된 방식 실행
+    # execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
+    # print()
