@@ -295,6 +295,91 @@ def run_decode_loop(
         print(tokenizer.decode(next_token[0]), end="", flush=True)
 
 
+def run_onnx_decode_loop(
+    onnx_decode_session,
+    tokenizer,
+    next_token,
+    past_key_values,
+    next_position,
+    max_new_tokens,
+):
+    """
+    ONNX decode 모델을 사용한 한 토큰씩 순차적으로 생성
+    """
+    print("Starting ONNX decode loop...")
+    print(tokenizer.decode(next_token.item()), end="", flush=True)
+
+    for i in range(max_new_tokens - 1):
+        current_pos = next_position.item()
+
+        # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
+        attention_mask = torch.zeros(1, 1024, dtype=torch.long)
+        attention_mask[0, :current_pos] = 1  # 현재 만들어진 attention length + 1 까지 유효
+
+        # ONNX 입력 준비
+        onnx_inputs = {
+            "input_ids": next_token.cpu().numpy().astype(np.int64),
+            "position_ids": next_position.cpu().numpy().astype(np.int64),
+            "attention_mask": attention_mask.cpu().numpy().astype(np.int64),
+        }
+
+        # 과거 KV cache를 ONNX 입력에 추가
+        if isinstance(past_key_values, DynamicCache):
+            # 첫 번째 iteration: DynamicCache에서 가져와서 1024로 패딩
+            for layer_idx in range(len(past_key_values)):
+                key, value = past_key_values[layer_idx]
+
+                # 1024 크기로 패딩된 KV cache 생성
+                padded_key = torch.zeros(1, key.shape[1], 1024, key.shape[3], dtype=key.dtype)
+                padded_value = torch.zeros(1, value.shape[1], 1024, value.shape[3], dtype=value.dtype)
+
+                # 기존 cache를 앞부분에 복사
+                seq_len = key.shape[2]
+                padded_key[:, :, :seq_len, :] = key
+                padded_value[:, :, :seq_len, :] = value
+
+                onnx_inputs[f"past.{layer_idx}.key"] = padded_key.cpu().numpy().astype(np.float32)
+                onnx_inputs[f"past.{layer_idx}.value"] = padded_value.cpu().numpy().astype(np.float32)
+
+                assert seq_len + 1 == current_pos, f"seq_len: {seq_len}, current_pos: {current_pos}"
+        else:
+            # 이후 iteration: ONNX 출력을 바로 사용 (이미 1024 크기)
+            for layer_idx in range(len(past_key_values) // 2):
+                key_idx = layer_idx * 2
+                value_idx = layer_idx * 2 + 1
+
+                for i in range(1024):
+                    print(f"{i}th kv")
+                    onnx_inputs[f"past.{layer_idx}.key"] = past_key_values[key_idx]
+                    print(f"{past_key_values[key_idx][0, 0, i, :].sum()}")
+                    onnx_inputs[f"past.{layer_idx}.value"] = past_key_values[value_idx]
+                    print(f"{past_key_values[value_idx][0, 0, i, :].sum()}")
+                exit(1)
+
+        # ONNX 추론 실행
+        onnx_outputs = onnx_decode_session.run(None, onnx_inputs)
+
+        # 로짓에서 다음 토큰 예측
+        logits = torch.tensor(onnx_outputs[0])
+        next_token_logits = logits[:, -1, :]
+        next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
+
+        # Position ID 업데이트
+        next_position = next_position + 1
+
+        # EOS 토큰 체크
+        eos_token_ids = [1, 106]
+        if next_token.item() in eos_token_ids:
+            break
+
+        # KV cache 업데이트 - ONNX 출력을 바로 사용
+        # ONNX 출력의 present KV cache를 다음 iteration의 past로 사용
+        past_key_values = onnx_outputs[1:]  # 첫 번째는 logits, 나머지는 present KV cache
+
+        # 스트리밍 출력
+        print(tokenizer.decode(next_token[0]), end="", flush=True)
+
+
 def execute_split_model(tokenizer, model, inputs):
     """
     Prefill + Decode로 분리된 실행
@@ -325,11 +410,11 @@ def execute_split_model(tokenizer, model, inputs):
     )
 
 
-def execute_onnx_split_model(tokenizer, model, inputs, onnx_prefill_session):
+def execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session):
     """
-    ONNX Prefill + Decode로 분리된 실행
+    ONNX Prefill + ONNX Decode로 분리된 실행
     """
-    print("Executing ONNX split model (ONNX prefill + PyTorch decode)...")
+    print("Executing ONNX split model (ONNX prefill + ONNX decode)...")
 
     # 1. 입력 준비
     input_ids = inputs["input_ids"]
@@ -343,10 +428,10 @@ def execute_onnx_split_model(tokenizer, model, inputs, onnx_prefill_session):
         onnx_prefill_session, input_ids, attention_mask
     )
 
-    # 3. Decode 루프 (PyTorch 모델 사용)
-    print("=== DECODE PHASE (PyTorch) ===")
-    run_decode_loop(
-        model,
+    # 3. ONNX Decode 루프
+    print("=== ONNX DECODE PHASE ===")
+    run_onnx_decode_loop(
+        onnx_decode_session,
         tokenizer,
         next_token,
         past_key_values,
@@ -364,18 +449,21 @@ if __name__ == "__main__":
     onnx_prefill_path = "./gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx"
     onnx_prefill_session = load_onnx_model(onnx_prefill_path)
 
+    onnx_decode_path = "./gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx"
+    onnx_decode_session = load_onnx_model(onnx_decode_path)
+
     # 기존 방식 실행
     # execute_original_model(tokenizer, model, inputs)
     # print()
 
     print("-" * 100)
 
-    # PyTorch 분리된 방식 실행
-    execute_split_model(tokenizer, model, inputs)
-    print()
+    # # PyTorch 분리된 방식 실행
+    # execute_split_model(tokenizer, model, inputs)
+    # print()
 
     print("-" * 100)
 
     # ONNX 분리된 방식 실행
-    execute_onnx_split_model(tokenizer, model, inputs, onnx_prefill_session)
+    execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
     print()

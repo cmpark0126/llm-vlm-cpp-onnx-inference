@@ -102,7 +102,9 @@ class StaticGemmaPrefill(nn.Module):
         # Initialize empty KV cache with fixed shape
         # Shape: [batch_size, num_heads, seq_len, head_dim]
         self.static_k_cache_shape = (1, num_key_value_heads, self.seq_length, head_dim)
+        print(f"static_k_cache_shape: {self.static_k_cache_shape}")
         self.static_v_cache_shape = (1, num_key_value_heads, self.seq_length, head_dim)
+        print(f"static_v_cache_shape: {self.static_v_cache_shape}")
 
         # Create cache containers for each layer
         self.register_buffer("cache_layers_info", torch.tensor(num_layers))
@@ -215,7 +217,7 @@ class StaticGemmaPrefill(nn.Module):
                 past_key_values=kv_cache,
                 output_attentions=False,
                 use_cache=True,
-                cache_position=self.static_cache_position.expand(batch_size, -1),
+                cache_position=None,
             )
 
             hidden_states = outputs[0]
@@ -238,6 +240,8 @@ class StaticGemmaPrefill(nn.Module):
         flattened_outputs = [logits]
 
         for layer_idx, (k_cache, v_cache) in enumerate(all_kv_caches):
+            print(f"k_cache.{layer_idx}.shape: {k_cache.shape}")
+            print(f"v_cache.{layer_idx}.shape: {v_cache.shape}")
             flattened_outputs.extend([k_cache, v_cache])
 
         return tuple(flattened_outputs)
@@ -287,7 +291,7 @@ def export_static_gemma_prefill_to_onnx(
         dynamic_axes=None,  # No dynamic axes - all static
         opset_version=17,
         do_constant_folding=True,
-        verbose=True,
+        verbose=False,
     )
 
     print(f"Static Gemma Prefill exported to {output_path}")
