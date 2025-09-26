@@ -29,3 +29,8 @@ llm_vlm_onnx_sample/
 # Temporary files
 *.tmp
 *.log
+
+# Python virtual environments
+.venv/
+env/
+.env
