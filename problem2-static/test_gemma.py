@@ -312,12 +312,13 @@ def run_onnx_decode_loop(
     print("Starting ONNX decode loop...")
     print(tokenizer.decode(next_token.item()), end="", flush=True)
 
+    static_past_kv = []
     for i in range(max_new_tokens - 1):
         current_pos = next_position.item()
 
         # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
         attention_mask = torch.zeros(1, 1024, dtype=torch.long)
-        attention_mask[0, :current_pos] = 1  # 현재 만들어진 attention length + 1 까지 유효
+        attention_mask[0, :current_pos] = 1  # 현재 위치까지만 유효
 
         # ONNX 입력 준비
         onnx_inputs = {
@@ -341,18 +342,16 @@ def run_onnx_decode_loop(
                 padded_key[:, :, :seq_len, :] = key
                 padded_value[:, :, :seq_len, :] = value
 
-                onnx_inputs[f"past.{layer_idx}.key"] = padded_key.cpu().numpy().astype(np.float32)
-                onnx_inputs[f"past.{layer_idx}.value"] = padded_value.cpu().numpy().astype(np.float32)
+                static_past_kv.extend([padded_key.cpu().numpy().astype(np.float32), padded_value.cpu().numpy().astype(np.float32)])
 
                 assert seq_len + 1 == current_pos, f"seq_len: {seq_len}, current_pos: {current_pos}"
-        else:
-            # 이후 iteration: ONNX 출력을 바로 사용 (이미 1024 크기)
-            for layer_idx in range(len(past_key_values) // 2):
-                key_idx = layer_idx * 2
-                value_idx = layer_idx * 2 + 1
 
-                onnx_inputs[f"past.{layer_idx}.key"] = past_key_values[key_idx]
-                onnx_inputs[f"past.{layer_idx}.value"] = past_key_values[value_idx]
+        for layer_idx in range(len(static_past_kv) // 2):
+            key_idx = layer_idx * 2
+            value_idx = layer_idx * 2 + 1
+
+            onnx_inputs[f"past.{layer_idx}.key"] = static_past_kv[key_idx]
+            onnx_inputs[f"past.{layer_idx}.value"] = static_past_kv[value_idx]
 
         # ONNX 추론 실행
         onnx_outputs = onnx_decode_session.run(None, onnx_inputs)
@@ -370,9 +369,12 @@ def run_onnx_decode_loop(
         if next_token.item() in eos_token_ids:
             break
 
-        # KV cache 업데이트 - ONNX 출력을 바로 사용
-        # ONNX 출력의 present KV cache를 다음 iteration의 past로 사용
-        past_key_values = onnx_outputs[1:]  # 첫 번째는 logits, 나머지는 present KV cache
+        # KV cache 업데이트 - PyTorch static decode와 동일한 방식
+        # ONNX 출력의 present KV cache를 static_past_kv에 업데이트
+        for past_kv, present_kv in zip(static_past_kv, onnx_outputs[1:]):
+            past_kv[0, 0, current_pos - 1, :] = present_kv
+
+        past_key_values = None  # DynamicCache는 첫 번째 iteration 이후 사용 안함
 
         # 스트리밍 출력
         print(tokenizer.decode(next_token[0]), end="", flush=True)
@@ -552,6 +554,7 @@ def run_pytorch_static_decode_loop(
     print("Starting PyTorch static decode loop...")
     print(tokenizer.decode(next_token.item()), end="", flush=True)
 
+    static_past_kv = []
     for i in range(max_new_tokens - 1):
         current_pos = next_position.item()
 
@@ -560,7 +563,6 @@ def run_pytorch_static_decode_loop(
         attention_mask[0, :current_pos] = 1  # 현재 위치까지만 유효
 
         # 과거 KV cache를 1024 크기로 패딩
-        static_past_kv = []
         if isinstance(past_key_values, DynamicCache):
             # 첫 번째 iteration: DynamicCache에서 가져와서 1024로 패딩
             for layer_idx in range(len(past_key_values)):
@@ -578,9 +580,6 @@ def run_pytorch_static_decode_loop(
                 static_past_kv.extend([padded_key, padded_value])
 
                 assert seq_len + 1 == current_pos, f"seq_len: {seq_len}, current_pos: {current_pos}"
-        else:
-            # 이후 iteration: 이미 1024 크기인 텐서들을 바로 사용
-            static_past_kv = list(past_key_values)
 
         with torch.no_grad():
             # StaticGemmaDecode 실행
@@ -606,7 +605,9 @@ def run_pytorch_static_decode_loop(
 
         # KV cache 업데이트 - Static 출력을 바로 사용
         # Static 출력의 present KV cache를 다음 iteration의 past로 사용
-        past_key_values = outputs[1:]  # 첫 번째는 logits, 나머지는 present KV cache
+        for past_kv, present_kv in zip(static_past_kv, outputs[1:]):
+            past_kv[0, 0, current_pos - 1, :] = present_kv
+        past_key_values = None
 
         # 스트리밍 출력
         print(tokenizer.decode(next_token[0]), end="", flush=True)

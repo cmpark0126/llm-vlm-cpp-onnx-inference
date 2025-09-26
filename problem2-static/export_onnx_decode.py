@@ -42,13 +42,13 @@ class TempCache:
             value_states
         )
 
-        self.key_states = new_key_states
-        self.value_states = new_value_states
+        self.input_key_states = key_states
+        self.input_value_states = value_states
 
         # print(f"self.key_states: {self.key_states[:, :, self.current_length, :].sum()}")
         # print(f"self.value_states: {self.value_states[:, :, self.current_length, :].sum()}")
 
-        return self.key_states, self.value_states
+        return new_key_states, new_value_states
 
 class StaticGemmaDecode(nn.Module):
     """
@@ -215,7 +215,7 @@ class StaticGemmaDecode(nn.Module):
             hidden_states = outputs[0]
 
             # Extract updated KV cache (should be same as past cache with new token added)
-            all_kv_caches.append((kv_cache.key_states, kv_cache.value_states))
+            all_kv_caches.append((kv_cache.input_key_states, kv_cache.input_value_states))
 
         # 6. Final layer norm
         hidden_states = self.norm(hidden_states)
