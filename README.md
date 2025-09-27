@@ -48,6 +48,7 @@ cd problem3-vlm
 ./run.sh
 cd ..
 
+# 이미지 프로세싱의 차이로 인해 뒤로 갈 수록 결과물이 달라지는 것으로 보임.
 # run_vlm.py (with not USE_SAMPLING)
 "The image is likely from a city in Asia, as it features a city skyline with tall buildings, a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest that it is likely a densely populated urban area with a mix of modern and traditional architecture. The night setting adds to the atmosphere of the scene, making it a visually appealing and captivating image."
 # ./run.sh (with not USE_SAMPLING)

@@ -276,6 +276,20 @@ std::string escape_special_chars(const std::string& text) {
     return escaped_text;
 }
 
+// Performance measurement functions
+static int64_t get_time_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::high_resolution_clock::now().time_since_epoch())
+        .count();
+}
+
+size_t get_peak_memory_usage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    // ru_maxrss is in kilobytes on Linux/macOS
+    return usage.ru_maxrss * 1024;  // convert KB to bytes
+}
+
 // Image processing function (similar to run_vlm.py lines 36-90)
 std::vector<float> process_image(const std::string& image_path) {
     // Parameters from Python code
@@ -687,8 +701,8 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
     return std::make_pair(next_token, std::move(past_kv_values));
 }
 
-// Decode function
-void run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session, std::vector<Ort::Value> past_kv_values, int first_token, int input_token_len, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator, const SimpleTokenizer& tokenizer, const std::string& output_path) {
+// Decode function with performance measurement
+void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& decoding_session, std::vector<Ort::Value> past_kv_values, int first_token, int input_token_len, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator, const SimpleTokenizer& tokenizer, const std::string& output_path, std::vector<double>& token_times_ms) {
     std::cout << "\nRunning decode step..." << std::endl;
     auto decode_start = std::chrono::high_resolution_clock::now();
 
@@ -699,6 +713,8 @@ void run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session, 
     std::cout << tokenizer.decode({first_token}) << std::flush;
 
     for (int step = 0; step < MAX_GEN_LEN; step++) {
+        int64_t token_start_ms = get_time_ms();
+
         // Get next token embedding
         auto next_hidden_states = run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
 
@@ -809,6 +825,11 @@ void run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session, 
 
         std::cout << tokenizer.decode({next_token}) << std::flush;
 
+        // Measure token generation time
+        int64_t token_end_ms = get_time_ms();
+        double token_duration_ms = token_end_ms - token_start_ms;
+        token_times_ms.push_back(token_duration_ms);
+
         // Save generated token (at the end like Python code)
         generated_ids.push_back(next_token);
     }
@@ -917,8 +938,9 @@ int main() {
     std::cout << "  - Min value: " << std::fixed << std::setprecision(4) << min_val << std::endl;
     std::cout << "  - Max value: " << std::fixed << std::setprecision(4) << max_val << std::endl;
 
-    // 5. Prefill Step (similar to run_vlm.py lines 117-170)
+    // 5. Prefill Step (similar to run_vlm.py lines 117-170) - Performance measurement start
     std::cout << "Running prefill step..." << std::endl;
+    int64_t generation_start_ms = get_time_ms();
     auto prefill_start = std::chrono::high_resolution_clock::now();
 
     // Create prompt with image token (similar to run_vlm.py line 30)
@@ -1011,10 +1033,40 @@ int main() {
     int next_token = prefill_result.first;
     std::vector<Ort::Value> past_kv_values = std::move(prefill_result.second);
 
+    // Measure TTFT (Time-to-First-Token)
+    int64_t first_token_time_ms = get_time_ms();
+    double ttft_ms = first_token_time_ms - generation_start_ms;
+
     std::cout << "\nVLM prefill completed successfully!" << std::endl;
 
-    // 6. Decode Step (similar to run_vlm.py lines 216-271)
-    run_decode(text_emb_session, decoding_session, std::move(past_kv_values), next_token, input_token_len, memory_info, allocator, tokenizer, output_path);
+    // 6. Decode Step (similar to run_vlm.py lines 216-271) with performance measurement
+    int64_t decode_start_ms = get_time_ms();
+    std::vector<double> token_times_ms;
+
+    // Modified run_decode call to return performance data
+    run_decode_with_performance(text_emb_session, decoding_session, std::move(past_kv_values), next_token, input_token_len, memory_info, allocator, tokenizer, output_path, token_times_ms);
+
+    // Performance measurements
+    int64_t generation_end_ms = get_time_ms();
+    double total_generation_time_ms = generation_end_ms - generation_start_ms;
+
+    // Calculate TPOT (Time-Per-Output-Token) - average of all tokens except first
+    double total_subsequent_time = 0.0;
+    for (size_t i = 0; i < token_times_ms.size(); i++) {
+        total_subsequent_time += token_times_ms[i];
+    }
+    double tpot_ms = token_times_ms.size() > 0 ? total_subsequent_time / token_times_ms.size() : 0.0;
+
+    // Get peak memory usage
+    size_t peak_memory = get_peak_memory_usage();
+
+    // Print performance metrics
+    std::cout << "\n=== Performance Metrics ===" << std::endl;
+    std::cout << "Time-to-First-Token (TTFT): " << std::fixed << std::setprecision(2) << ttft_ms << " ms" << std::endl;
+    std::cout << "Time-Per-Output-Token (TPOT): " << std::fixed << std::setprecision(2) << tpot_ms << " ms" << std::endl;
+    std::cout << "Peak Memory Usage: " << std::fixed << std::setprecision(2) << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "Total Generation Time: " << std::fixed << std::setprecision(2) << total_generation_time_ms << " ms" << std::endl;
+    std::cout << "Total Tokens Generated: " << (1 + token_times_ms.size()) << std::endl;
 
     return 0;
 }
