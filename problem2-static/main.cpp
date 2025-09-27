@@ -380,5 +380,222 @@ int main() {
     std::cout << "Next token text: \"" << escape_special_chars(next_token_text) << "\""
               << std::endl;
 
+    // Prepare for decode phase
+    std::cout << "\n=== DECODE PHASE PREPARATION ===" << std::endl;
+
+    // Initialize decode inputs
+    int64_t current_token = next_token_id;
+    int64_t current_position = original_seq_len + 1;  // next position after prefill
+    const int MAX_SEQ_LEN = 1024;
+
+    std::cout << "Current token: " << current_token << std::endl;
+    std::cout << "Current position: " << current_position << std::endl;
+
+    // Create decode input tensors
+    std::vector<int64_t> decode_input_ids = {current_token};
+    std::vector<int64_t> decode_position_ids = {current_position};
+
+    // Create 1024-size attention mask (valid positions up to current_position)
+    std::vector<int64_t> decode_attention_mask(MAX_SEQ_LEN, 0);
+    for (int i = 0; i < current_position; i++) {
+        decode_attention_mask[i] = 1;
+    }
+
+    std::cout << "Decode inputs prepared:" << std::endl;
+    std::cout << "  input_ids: [" << decode_input_ids[0] << "] (shape: [1, 1])" << std::endl;
+    std::cout << "  position_ids: [" << decode_position_ids[0] << "] (shape: [1, 1])" << std::endl;
+    std::cout << "  attention_mask shape: [1, " << MAX_SEQ_LEN << "]" << std::endl;
+    std::cout << "  attention_mask valid positions: " << current_position << std::endl;
+
+    // Load decode ONNX model
+    std::string decode_model_path = "../gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx";
+    std::cout << "Loading ONNX decode model: " << decode_model_path << std::endl;
+
+    Ort::Session decode_session(env, decode_model_path.c_str(), session_options);
+    std::cout << "ONNX decode model loaded successfully" << std::endl;
+
+    // Process KV cache from prefill outputs for decode input
+    std::cout << "Processing KV cache from prefill outputs..." << std::endl;
+
+    // Calculate number of layers from prefill outputs (exclude logits)
+    int num_layers = (outputs.size() - 1) / 2;
+    std::cout << "Number of layers: " << num_layers << std::endl;
+
+    // Create padded KV cache tensors for decode (1024 size)
+    std::vector<std::vector<float>> kv_cache_storage;
+    std::vector<Ort::Value> past_kv_tensors;
+
+    for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
+        // Get key and value from prefill outputs
+        int key_output_idx = 1 + layer_idx * 2;
+        int value_output_idx = 1 + layer_idx * 2 + 1;
+
+        auto& key_tensor = outputs[key_output_idx];
+        auto& value_tensor = outputs[value_output_idx];
+
+        auto key_shape = key_tensor.GetTensorTypeAndShapeInfo().GetShape();
+        auto value_shape = value_tensor.GetTensorTypeAndShapeInfo().GetShape();
+
+        // [batch, num_heads, seq_len, head_dim] -> [batch, num_heads, 1024, head_dim]
+        std::vector<int64_t> padded_shape = {key_shape[0], key_shape[1], MAX_SEQ_LEN, key_shape[3]};
+        size_t padded_size = padded_shape[0] * padded_shape[1] * padded_shape[2] * padded_shape[3];
+
+        // Create padded key tensor
+        kv_cache_storage.emplace_back(padded_size, 0.0f);
+        auto& padded_key_data = kv_cache_storage.back();
+
+        const float* original_key_data = key_tensor.GetTensorData<float>();
+
+        // Copy original data to padded tensor
+        for (int64_t b = 0; b < key_shape[0]; b++) {
+            for (int64_t h = 0; h < key_shape[1]; h++) {
+                for (int64_t s = 0; s < original_seq_len; s++) {  // only copy valid sequence length
+                    for (int64_t d = 0; d < key_shape[3]; d++) {
+                        size_t src_idx = b * key_shape[1] * key_shape[2] * key_shape[3] +
+                                         h * key_shape[2] * key_shape[3] + s * key_shape[3] + d;
+                        size_t dst_idx = b * padded_shape[1] * padded_shape[2] * padded_shape[3] +
+                                         h * padded_shape[2] * padded_shape[3] +
+                                         s * padded_shape[3] + d;
+                        padded_key_data[dst_idx] = original_key_data[src_idx];
+                    }
+                }
+            }
+        }
+
+        auto padded_key_tensor = Ort::Value::CreateTensor<float>(
+            memory_info, padded_key_data.data(), padded_key_data.size(), padded_shape.data(),
+            padded_shape.size());
+        past_kv_tensors.push_back(std::move(padded_key_tensor));
+
+        // Create padded value tensor
+        kv_cache_storage.emplace_back(padded_size, 0.0f);
+        auto& padded_value_data = kv_cache_storage.back();
+
+        const float* original_value_data = value_tensor.GetTensorData<float>();
+
+        // Copy original data to padded tensor
+        for (int64_t b = 0; b < value_shape[0]; b++) {
+            for (int64_t h = 0; h < value_shape[1]; h++) {
+                for (int64_t s = 0; s < original_seq_len; s++) {  // only copy valid sequence length
+                    for (int64_t d = 0; d < value_shape[3]; d++) {
+                        size_t src_idx = b * value_shape[1] * value_shape[2] * value_shape[3] +
+                                         h * value_shape[2] * value_shape[3] + s * value_shape[3] +
+                                         d;
+                        size_t dst_idx = b * padded_shape[1] * padded_shape[2] * padded_shape[3] +
+                                         h * padded_shape[2] * padded_shape[3] +
+                                         s * padded_shape[3] + d;
+                        padded_value_data[dst_idx] = original_value_data[src_idx];
+                    }
+                }
+            }
+        }
+
+        auto padded_value_tensor = Ort::Value::CreateTensor<float>(
+            memory_info, padded_value_data.data(), padded_value_data.size(), padded_shape.data(),
+            padded_shape.size());
+        past_kv_tensors.push_back(std::move(padded_value_tensor));
+    }
+
+    std::cout << "KV cache processed: " << past_kv_tensors.size()
+              << " tensors (key/value pairs for " << num_layers << " layers)" << std::endl;
+
+    // Create decode input tensors
+    std::vector<int64_t> decode_input_shape = {1, 1};
+    std::vector<int64_t> decode_attention_shape = {1, MAX_SEQ_LEN};
+
+    auto decode_input_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, decode_input_ids.data(), decode_input_ids.size(), decode_input_shape.data(),
+        decode_input_shape.size());
+
+    auto decode_position_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, decode_position_ids.data(), decode_position_ids.size(),
+        decode_input_shape.data(), decode_input_shape.size());
+
+    auto decode_attention_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, decode_attention_mask.data(), decode_attention_mask.size(),
+        decode_attention_shape.data(), decode_attention_shape.size());
+
+    // Prepare decode input names and values
+    std::vector<const char*> decode_input_names = {"input_ids", "position_ids", "attention_mask"};
+    std::vector<std::string> kv_input_names_storage;
+
+    // Add past KV cache input names
+    for (int layer_idx = 0; layer_idx < num_layers; layer_idx++) {
+        kv_input_names_storage.push_back("past." + std::to_string(layer_idx) + ".key");
+        kv_input_names_storage.push_back("past." + std::to_string(layer_idx) + ".value");
+    }
+
+    // Add KV input names to decode_input_names
+    for (const auto& name : kv_input_names_storage) {
+        decode_input_names.push_back(name.c_str());
+    }
+
+    std::cout << "Decode input names (" << decode_input_names.size() << "): ";
+    for (size_t i = 0; i < decode_input_names.size(); i++) {
+        std::cout << "\"" << decode_input_names[i] << "\"";
+        if (i < decode_input_names.size() - 1) std::cout << ", ";
+    }
+    std::cout << std::endl;
+
+    std::vector<Ort::Value> decode_input_values;
+    decode_input_values.push_back(std::move(decode_input_tensor));
+    decode_input_values.push_back(std::move(decode_position_tensor));
+    decode_input_values.push_back(std::move(decode_attention_tensor));
+    for (auto& kv_tensor : past_kv_tensors) {
+        decode_input_values.push_back(std::move(kv_tensor));
+    }
+
+    std::cout << "Input values count: " << decode_input_values.size() << std::endl;
+    std::cout << "Input names count: " << decode_input_names.size() << std::endl;
+
+    if (decode_input_values.size() != decode_input_names.size()) {
+        std::cerr << "Error: Input names and values count mismatch!" << std::endl;
+        return 1;
+    }
+
+    // Get decode output names
+    size_t decode_output_count = decode_session.GetOutputCount();
+    std::vector<const char*> decode_output_names(decode_output_count);
+    std::vector<std::string> decode_output_names_storage(decode_output_count);
+
+    for (size_t i = 0; i < decode_output_count; ++i) {
+        auto output_name_allocated = decode_session.GetOutputNameAllocated(i, allocator);
+        decode_output_names_storage[i] = std::string(output_name_allocated.get());
+        decode_output_names[i] = decode_output_names_storage[i].c_str();
+    }
+
+    std::cout << "Running ONNX decode inference..." << std::endl;
+
+    // Run decode inference
+    auto decode_outputs = decode_session.Run(
+        Ort::RunOptions{nullptr}, decode_input_names.data(), decode_input_values.data(),
+        decode_input_values.size(), decode_output_names.data(), decode_output_names.size());
+
+    std::cout << "ONNX decode inference completed" << std::endl;
+    std::cout << "Number of decode outputs: " << decode_outputs.size() << std::endl;
+
+    // Get next token from decode logits
+    const float* decode_logits_data = decode_outputs[0].GetTensorData<float>();
+    auto decode_logits_shape = decode_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+    int decode_vocab_size = decode_logits_shape[2];
+
+    // Find argmax for next token
+    const float* decode_last_logits =
+        decode_logits_data + (decode_logits_shape[1] - 1) * decode_vocab_size;
+    int64_t decode_next_token = 0;
+    float decode_max_logit = decode_last_logits[0];
+    for (int i = 1; i < decode_vocab_size; i++) {
+        if (decode_last_logits[i] > decode_max_logit) {
+            decode_max_logit = decode_last_logits[i];
+            decode_next_token = i;
+        }
+    }
+
+    std::cout << "Decode predicted next token ID: " << decode_next_token
+              << " (logit: " << decode_max_logit << ")" << std::endl;
+    std::string decode_next_token_text = tokenizer.decode(decode_next_token);
+    std::cout << "Decode next token text: \"" << escape_special_chars(decode_next_token_text)
+              << "\"" << std::endl;
+
     return 0;
 }
