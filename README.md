@@ -41,6 +41,9 @@ hf auth login
 cd ..
 
 # 문제 3: VLM 텍스트 생성
+# NOTE: "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n"로 prompt 변경하여 테스트 수행
+# - 이유1: 기존에는 image tag가 없음
+# - 이유2: 기존에는 사소한 typo 존재
 cd problem3-vlm
 ./run.sh
 cd ..

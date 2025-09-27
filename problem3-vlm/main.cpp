@@ -19,6 +19,26 @@ const int64_t IMAGE_TOKEN_INDEX = 151646;
 const int MAX_GEN_LEN = 128;
 const bool USE_SAMPLING = true;
 
+std::string escape_special_chars(const std::string& text) {
+    std::string escaped_text = text;
+    size_t pos = 0;
+    while ((pos = escaped_text.find('\n', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\n");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped_text.find('\t', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\t");
+        pos += 2;
+    }
+    pos = 0;
+    while ((pos = escaped_text.find('\r', pos)) != std::string::npos) {
+        escaped_text.replace(pos, 1, "\\r");
+        pos += 2;
+    }
+    return escaped_text;
+}
+
 // Image processing function (similar to run_vlm.py lines 36-90)
 std::vector<float> process_image(const std::string& image_path) {
     // Parameters from Python code
@@ -149,6 +169,14 @@ struct SimpleTokenizer {
             }
         }
 
+        if (tokenizer_config.contains("added_tokens")) {
+            std::cout << "Added tokens found" << std::endl;
+            for (const auto& value : tokenizer_config["added_tokens"]) {
+                vocab[value["content"]] = value["id"];
+                id_to_token[value["id"]] = value["content"];
+            }
+        }
+
         // Add special image token with hardcoded ID
         vocab["<image>"] = IMAGE_TOKEN_INDEX;
         id_to_token[IMAGE_TOKEN_INDEX] = "<image>";
@@ -158,10 +186,117 @@ struct SimpleTokenizer {
         std::cout << "Added special token: <image> with ID: " << IMAGE_TOKEN_INDEX << std::endl;
     }
 
-    std::vector<int64_t> encode(const std::string& text) {
-        // Simplified encoding - for VLM we'll need to handle special tokens
+    std::string preprocess(const std::string& text) {
+        // Replace spaces and newlines for VLM tokenizer
+        std::string processed_text = text;
+
+        // Replace spaces with Ġ (GPT-style tokenizer)
+        size_t space_pos = 0;
+        while ((space_pos = processed_text.find(' ', space_pos)) != std::string::npos) {
+            processed_text.replace(space_pos, 1, "Ġ");
+            space_pos += 2;  // UTF-8 encoding of Ġ is 2 bytes
+        }
+
+        // Replace newlines with Ċ
+        size_t newline_pos = 0;
+        while ((newline_pos = processed_text.find('\n', newline_pos)) != std::string::npos) {
+            processed_text.replace(newline_pos, 1, "Ċ");
+            newline_pos += 2;  // UTF-8 encoding of Ċ is 2 bytes
+        }
+
+        return processed_text;
+    }
+
+    std::vector<std::string> split_by_special_tokens(const std::string& text) {
+        std::vector<std::string> segments;
+        size_t pos = 0;
+
+        while (pos < text.length()) {
+            size_t start_bracket = text.find('<', pos);
+
+            if (start_bracket == std::string::npos) {
+                // No more special tokens, add remaining text
+                if (pos < text.length()) {
+                    segments.push_back(text.substr(pos));
+                }
+                break;
+            }
+
+            // Add text before special token
+            if (start_bracket > pos) {
+                segments.push_back(text.substr(pos, start_bracket - pos));
+            }
+
+            // Find end of special token
+            size_t end_bracket = text.find('>', start_bracket);
+            if (end_bracket == std::string::npos) {
+                // No closing bracket, treat as regular text
+                segments.push_back(text.substr(start_bracket));
+                break;
+            }
+
+            // Add special token
+            std::string special_token = text.substr(start_bracket, end_bracket - start_bracket + 1);
+            segments.push_back(special_token);
+            pos = end_bracket + 1;
+        }
+
+        return segments;
+    }
+
+    std::vector<int64_t> encode_segment(const std::string& segment) {
         std::vector<int64_t> tokens;
-        // This is a placeholder - actual implementation would need proper tokenization
+
+        // If it's a special token (starts with <), try direct match first
+        if (!segment.empty() && segment[0] == '<' && segment.back() == '>') {
+            if (vocab.find(segment) != vocab.end()) {
+                tokens.push_back(vocab[segment]);
+                return tokens;
+            }
+        }
+
+        // Regular longest match for non-special tokens
+        size_t pos = 0;
+        while (pos < segment.length()) {
+            std::string longest_match;
+            int64_t longest_token_id = -1;
+
+            for (size_t len = std::min(segment.length() - pos, (size_t)100); len > 0; len--) {
+                std::string candidate = segment.substr(pos, len);
+                if (vocab.find(candidate) != vocab.end()) {
+                    longest_match = candidate;
+                    longest_token_id = vocab[candidate];
+                    break;
+                }
+            }
+
+            if (longest_token_id != -1) {
+                tokens.push_back(longest_token_id);
+                pos += longest_match.length();
+            } else {
+                std::cerr << "Error: No token found at position " << pos
+                          << " in segment: " << segment << std::endl;
+                exit(1);
+            }
+        }
+
+        return tokens;
+    }
+
+    std::vector<int64_t> encode(const std::string& text) {
+        std::vector<int64_t> tokens;
+
+        // Split text by special tokens
+        auto segments = split_by_special_tokens(text);
+
+        // Encode each segment
+        for (const auto& segment : segments) {
+            if (!segment.empty()) {
+                auto segment_tokens = encode_segment(segment);
+                tokens.insert(tokens.end(), segment_tokens.begin(), segment_tokens.end());
+            }
+        }
+
         return tokens;
     }
 
@@ -257,17 +392,77 @@ int main() {
     std::cout << "  - Max value: " << std::fixed << std::setprecision(4) << max_val << std::endl;
 
     // 5. Prefill Step (similar to run_vlm.py lines 117-170)
-    //    - Create prompt with image token: "<|im_start|>user\n<image>\n{query}<|im_end|>\n<|im_start|>assistant\n"
-    //    - Tokenize input prompt
-    //    - Find image token position (IMAGE_TOKEN_INDEX = 151646)
-    //    - Process image through vision encoder
-    //    - Get text embeddings
-    //    - Split text embeddings at image token position
-    //    - Merge: pre_image_text + image_features + post_image_text
-    //    - Prepare decoder inputs with dummy past_kv_values (24 layers, key/value pairs)
-    //    - Run prefill inference
-    //    - Extract first token using top-p sampling (USE_SAMPLING = true)
-    //    - Save past_kv_values for decode step
+    std::cout << "Running prefill step..." << std::endl;
+    auto prefill_start = std::chrono::high_resolution_clock::now();
+
+    // Create prompt with image token (similar to run_vlm.py line 30)
+    std::string prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n";
+    std::cout << "Prompt created: \"" << escape_special_chars(prompt) << "\"" << std::endl;
+
+    // Tokenize input prompt (similar to run_vlm.py line 121)
+    std::cout << "Preprocessing prompt..." << std::endl;
+    std::string preprocessed_prompt = tokenizer.preprocess(prompt);
+    std::cout << "Preprocessed: \"" << escape_special_chars(preprocessed_prompt) << "\"" << std::endl;
+
+    auto input_ids = tokenizer.encode(preprocessed_prompt);
+    std::cout << "Input IDs (length: " << input_ids.size() << "): ";
+    for (size_t i = 0; i < input_ids.size(); i++) {
+        std::cout << input_ids[i];
+        if (i < input_ids.size() - 1) std::cout << " ";
+    }
+    std::cout << std::endl;
+
+    // Find image token position (similar to run_vlm.py line 122)
+    int image_token_pos = -1;
+    for (size_t i = 0; i < input_ids.size(); i++) {
+        if (input_ids[i] == IMAGE_TOKEN_INDEX) {
+            image_token_pos = i;
+            break;
+        }
+    }
+
+    if (image_token_pos == -1) {
+        std::cerr << "Error: Image token not found in input_ids!" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Image token position: " << image_token_pos << std::endl;
+
+    // // Get image embedding & Project image embedding to text embedding space (similar to run_vlm.py lines 141-143)
+    // Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+    // // Create image tensor for vision encoder
+    // std::vector<int64_t> image_shape = {1, 3, 224, 224};
+    // auto image_tensor = Ort::Value::CreateTensor<float>(memory_info, image_tensor_data.data(),
+    //                                                     image_tensor_data.size(), image_shape.data(),
+    //                                                     image_shape.size());
+
+    // // Run vision encoder (image_emb_session)
+    // std::vector<const char*> vision_input_names = {"pixel_values"};
+    // std::vector<Ort::Value> vision_input_values;
+    // vision_input_values.push_back(std::move(image_tensor));
+
+    // auto vision_outputs = image_emb_session.Run(Ort::RunOptions{nullptr}, vision_input_names.data(),
+    //                                             vision_input_values.data(), vision_input_values.size(),
+    //                                             nullptr, 0);
+
+    // std::cout << "Vision encoder completed, got " << vision_outputs.size() << " outputs" << std::endl;
+
+    // // Get text embedding (similar to run_vlm.py lines 145-147)
+    // std::vector<int64_t> text_input_shape = {1, static_cast<int64_t>(input_ids.size())};
+    // auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(memory_info, input_ids.data(),
+    //                                                            input_ids.size(), text_input_shape.data(),
+    //                                                            text_input_shape.size());
+
+    // std::vector<const char*> text_input_names = {"input_ids"};
+    // std::vector<Ort::Value> text_input_values;
+    // text_input_values.push_back(std::move(text_input_tensor));
+
+    // auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
+    //                                          text_input_values.data(), text_input_values.size(),
+    //                                          nullptr, 0);
+
+    // std::cout << "Text embedding completed, got " << text_outputs.size() << " outputs" << std::endl;
 
     // 6. Top-P Sampling Function (similar to run_vlm.py lines 93-107)
     //    - Sort logits in descending order
