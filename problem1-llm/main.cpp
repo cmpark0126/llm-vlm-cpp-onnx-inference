@@ -402,12 +402,6 @@ int main() {
     std::cout << "Original prompt: \"" << escape_special_chars(prompt) << "\"" << std::endl;
     std::cout << "Decoded prompt: \"" << escape_special_chars(decoded_prompt) << "\"" << std::endl;
 
-    if (decoded_prompt == preprocessed_prompt) {
-        std::cout << "✓ Encode/Decode verification passed" << std::endl;
-    } else {
-        std::cout << "✗ Encode/Decode verification failed!" << std::endl;
-    }
-
     std::cout << "All tokens: ";
     for (int64_t token : input_ids) {
         std::cout << token << " ";

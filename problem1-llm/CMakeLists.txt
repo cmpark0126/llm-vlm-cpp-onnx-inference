@@ -6,9 +6,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ONNX Runtime
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
-    PATHS /usr/include/onnxruntime /usr/local/include/onnxruntime)
+    PATHS /usr/include/onnxruntime /usr/local/include/onnxruntime ${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime-linux-x64-1.19.0/include ${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime-linux-aarch64-1.19.0/include)
 find_library(ONNXRUNTIME_LIB onnxruntime
-    PATHS /usr/lib /usr/local/lib)
+    PATHS /usr/lib /usr/local/lib ${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime-linux-x64-1.19.0/lib ${CMAKE_CURRENT_SOURCE_DIR}/../onnxruntime-linux-aarch64-1.19.0/lib)
 
 # nlohmann/json for JSON parsing
 include(FetchContent)

@@ -3,9 +3,9 @@ set -e
 
 echo "Problem 2: Static Graph Export & Text Generation"
 
-# Export ONNX graphs
-echo "Exporting ONNX graphs..."
-python3 export_onnx.py
+# Export ONNX Static Graph
+python3 export_onnx_prefill.py
+python3 export_onnx_decode.py
 
 # Build C++ application
 echo "Building C++ application..."
