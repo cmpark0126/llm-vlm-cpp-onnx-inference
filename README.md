@@ -33,12 +33,9 @@ cd problem1-llm
 ./run.sh
 cd ..
 
-# 문제 2: Static graph export & 텍스트 생성 (TODO: single script)
+# 문제 2: Static graph export & 텍스트 생성 (TODO: compare to original)
 cd problem2-static
 hf auth login
-python3 export_onnx_prefill.py
-python3 export_onnx_decode.py
-python3 test_gemma.py
 ./run.sh
 cd ..
 
