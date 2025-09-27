@@ -7,10 +7,10 @@ docker build -t llm-vlm-dev .
 docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -d llm-vlm-dev sleep infinity
 docker exec -it llm-vlm-dev /bin/bash
 $ chmod +x install_onnxruntime.sh
-$ ./install_onnxruntime.sh # Docker 컨테이너 내에서
-$ . .venv/bin/activate # Docker 컨테이너 내에서
+$ ./install_onnxruntime.sh
+$ . .venv/bin/activate
 $ ...
-$ exit # Docker 컨테이너 내에서
+$ exit
 docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ```
 
@@ -23,6 +23,7 @@ git clone https://huggingface.co/geonmin-kim/llm_vlm_onnx_sample
 cd llm_vlm_onnx_sample
 git lfs pull
 python3 run_llm.py
+python3 run_vlm.py
 ```
 
 ## 실행 방법 (TODO: O3 compile)
