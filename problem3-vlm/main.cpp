@@ -428,25 +428,35 @@ int main() {
 
     std::cout << "Image token position: " << image_token_pos << std::endl;
 
-    // // Get image embedding & Project image embedding to text embedding space (similar to run_vlm.py lines 141-143)
-    // Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    // Get image embedding & Project image embedding to text embedding space (similar to run_vlm.py lines 141-143)
+    Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-    // // Create image tensor for vision encoder
-    // std::vector<int64_t> image_shape = {1, 3, 224, 224};
-    // auto image_tensor = Ort::Value::CreateTensor<float>(memory_info, image_tensor_data.data(),
-    //                                                     image_tensor_data.size(), image_shape.data(),
-    //                                                     image_shape.size());
+    // Create image tensor for vision encoder
+    std::vector<int64_t> image_shape = {1, 3, 224, 224};
+    auto image_tensor = Ort::Value::CreateTensor<float>(memory_info, image_tensor_data.data(),
+                                                        image_tensor_data.size(), image_shape.data(),
+                                                        image_shape.size());
 
-    // // Run vision encoder (image_emb_session)
-    // std::vector<const char*> vision_input_names = {"pixel_values"};
-    // std::vector<Ort::Value> vision_input_values;
-    // vision_input_values.push_back(std::move(image_tensor));
+    // Run vision encoder (image_emb_session)
+    std::vector<const char*> vision_input_names = {"pixel_values"};
+    std::vector<const char*> vision_output_names = {"hidden_state"};
+    std::vector<Ort::Value> vision_input_values;
+    vision_input_values.push_back(std::move(image_tensor));
 
-    // auto vision_outputs = image_emb_session.Run(Ort::RunOptions{nullptr}, vision_input_names.data(),
-    //                                             vision_input_values.data(), vision_input_values.size(),
-    //                                             nullptr, 0);
+    auto vision_outputs = image_emb_session.Run(Ort::RunOptions{nullptr}, vision_input_names.data(),
+                                                vision_input_values.data(), vision_input_values.size(),
+                                                vision_output_names.data(), vision_output_names.size());
 
-    // std::cout << "Vision encoder completed, got " << vision_outputs.size() << " outputs" << std::endl;
+    std::cout << "Vision encoder completed, got " << vision_outputs.size() << " outputs" << std::endl;
+
+    // Check output shape
+    auto vision_shape = vision_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+    std::cout << "Vision output shape: [";
+    for (size_t i = 0; i < vision_shape.size(); i++) {
+        std::cout << vision_shape[i];
+        if (i < vision_shape.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]" << std::endl;
 
     // // Get text embedding (similar to run_vlm.py lines 145-147)
     // std::vector<int64_t> text_input_shape = {1, static_cast<int64_t>(input_ids.size())};
