@@ -9,6 +9,7 @@ using json = nlohmann::json;
 
 // Constants
 const int PREFILL_SEQ_LEN = 128;
+const int DEFAULT_MAX_NEW_TOKENS = 1024;
 
 struct SimpleTokenizer {
     std::string tokenizer_path;
@@ -564,38 +565,137 @@ int main() {
         decode_output_names[i] = decode_output_names_storage[i].c_str();
     }
 
-    std::cout << "Running ONNX decode inference..." << std::endl;
+    // Start decode loop
+    const std::vector<int64_t> EOS_TOKEN_IDS = {1, 106};  // [1, 106] from test_gemma.py
 
-    // Run decode inference
-    auto decode_outputs = decode_session.Run(
-        Ort::RunOptions{nullptr}, decode_input_names.data(), decode_input_values.data(),
-        decode_input_values.size(), decode_output_names.data(), decode_output_names.size());
+    std::cout << "Starting decode loop (max " << DEFAULT_MAX_NEW_TOKENS << " tokens)..."
+              << std::endl;
 
-    std::cout << "ONNX decode inference completed" << std::endl;
-    std::cout << "Number of decode outputs: " << decode_outputs.size() << std::endl;
+    // Stream first token
+    std::string first_token_text = tokenizer.decode(current_token);
+    if (first_token_text.find("<") == std::string::npos &&
+        first_token_text.find(">") == std::string::npos) {
+        std::cout << first_token_text << std::flush;
+    }
 
-    // Get next token from decode logits
-    const float* decode_logits_data = decode_outputs[0].GetTensorData<float>();
-    auto decode_logits_shape = decode_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    int decode_vocab_size = decode_logits_shape[2];
+    for (int i = 0; i < DEFAULT_MAX_NEW_TOKENS - 1; i++) {
+        // Run decode inference
+        auto decode_outputs = decode_session.Run(
+            Ort::RunOptions{nullptr}, decode_input_names.data(), decode_input_values.data(),
+            decode_input_values.size(), decode_output_names.data(), decode_output_names.size());
 
-    // Find argmax for next token
-    const float* decode_last_logits =
-        decode_logits_data + (decode_logits_shape[1] - 1) * decode_vocab_size;
-    int64_t decode_next_token = 0;
-    float decode_max_logit = decode_last_logits[0];
-    for (int i = 1; i < decode_vocab_size; i++) {
-        if (decode_last_logits[i] > decode_max_logit) {
-            decode_max_logit = decode_last_logits[i];
-            decode_next_token = i;
+        // Get next token from decode logits
+        const float* decode_logits_data = decode_outputs[0].GetTensorData<float>();
+        auto decode_logits_shape = decode_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+        int decode_vocab_size = decode_logits_shape[2];
+
+        // Find argmax for next token
+        const float* decode_last_logits =
+            decode_logits_data + (decode_logits_shape[1] - 1) * decode_vocab_size;
+        int64_t decode_next_token = 0;
+        float decode_max_logit = decode_last_logits[0];
+        for (int j = 1; j < decode_vocab_size; j++) {
+            if (decode_last_logits[j] > decode_max_logit) {
+                decode_max_logit = decode_last_logits[j];
+                decode_next_token = j;
+            }
+        }
+
+        // Check for EOS tokens
+        bool is_eos = false;
+        for (int64_t eos_id : EOS_TOKEN_IDS) {
+            if (decode_next_token == eos_id) {
+                is_eos = true;
+                break;
+            }
+        }
+        if (is_eos) {
+            std::cout << std::endl;
+            break;
+        }
+
+        // Update KV cache: assign present KV cache to current position in past KV cache
+        for (size_t kv_idx = 0; kv_idx < kv_cache_storage.size(); kv_idx++) {
+            const float* present_data = decode_outputs[1 + kv_idx].GetTensorData<float>();
+            auto present_shape = decode_outputs[1 + kv_idx].GetTensorTypeAndShapeInfo().GetShape();
+
+            // present shape: [1, num_heads, 1, head_dim]
+            // Update position (current_position - 1) in kv_cache_storage
+            int update_pos = current_position - 1;
+            auto& cache_data = kv_cache_storage[kv_idx];
+
+            // Calculate indices: cache is [1, num_heads, 1024, head_dim]
+            for (int64_t h = 0; h < present_shape[1]; h++) {
+                for (int64_t d = 0; d < present_shape[3]; d++) {
+                    size_t cache_idx =
+                        h * MAX_SEQ_LEN * present_shape[3] + update_pos * present_shape[3] + d;
+                    size_t present_idx = h * present_shape[3] + d;
+                    cache_data[cache_idx] = present_data[present_idx];
+                }
+            }
+        }
+
+        // Update for next iteration
+        current_token = decode_next_token;
+        current_position++;
+
+        // Update input tensors
+        decode_input_ids[0] = current_token;
+        decode_position_ids[0] = current_position;
+
+        // Update attention mask
+        if (current_position <= MAX_SEQ_LEN) {
+            decode_attention_mask[current_position - 1] = 1;
+        }
+
+        // Recreate input tensors with updated data
+        decode_input_values.clear();
+
+        auto new_decode_input_tensor = Ort::Value::CreateTensor<int64_t>(
+            memory_info, decode_input_ids.data(), decode_input_ids.size(),
+            decode_input_shape.data(), decode_input_shape.size());
+
+        auto new_decode_position_tensor = Ort::Value::CreateTensor<int64_t>(
+            memory_info, decode_position_ids.data(), decode_position_ids.size(),
+            decode_input_shape.data(), decode_input_shape.size());
+
+        auto new_decode_attention_tensor = Ort::Value::CreateTensor<int64_t>(
+            memory_info, decode_attention_mask.data(), decode_attention_mask.size(),
+            decode_attention_shape.data(), decode_attention_shape.size());
+
+        decode_input_values.push_back(std::move(new_decode_input_tensor));
+        decode_input_values.push_back(std::move(new_decode_position_tensor));
+        decode_input_values.push_back(std::move(new_decode_attention_tensor));
+
+        // Recreate KV cache tensors with updated data
+        for (size_t kv_idx = 0; kv_idx < kv_cache_storage.size(); kv_idx++) {
+            std::vector<int64_t> padded_shape;
+            if (kv_idx % 2 == 0) {  // key tensor
+                auto& key_tensor = outputs[1 + kv_idx];
+                auto key_shape = key_tensor.GetTensorTypeAndShapeInfo().GetShape();
+                padded_shape = {key_shape[0], key_shape[1], MAX_SEQ_LEN, key_shape[3]};
+            } else {  // value tensor
+                auto& value_tensor = outputs[1 + kv_idx];
+                auto value_shape = value_tensor.GetTensorTypeAndShapeInfo().GetShape();
+                padded_shape = {value_shape[0], value_shape[1], MAX_SEQ_LEN, value_shape[3]};
+            }
+
+            auto kv_tensor = Ort::Value::CreateTensor<float>(
+                memory_info, kv_cache_storage[kv_idx].data(), kv_cache_storage[kv_idx].size(),
+                padded_shape.data(), padded_shape.size());
+            decode_input_values.push_back(std::move(kv_tensor));
+        }
+
+        // Stream output
+        std::string token_text = tokenizer.decode(decode_next_token);
+        if (token_text.find("<") == std::string::npos &&
+            token_text.find(">") == std::string::npos) {
+            std::cout << token_text << std::flush;
         }
     }
 
-    std::cout << "Decode predicted next token ID: " << decode_next_token
-              << " (logit: " << decode_max_logit << ")" << std::endl;
-    std::string decode_next_token_text = tokenizer.decode(decode_next_token);
-    std::cout << "Decode next token text: \"" << escape_special_chars(decode_next_token_text)
-              << "\"" << std::endl;
+    std::cout << std::endl;
+    std::cout << "Decode loop completed" << std::endl;
 
     return 0;
 }

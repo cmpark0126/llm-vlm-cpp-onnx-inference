@@ -639,7 +639,7 @@ def execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decod
         next_token,
         past_key_values,
         next_position,
-        max_new_tokens=128,
+        max_new_tokens=1024,
     )
 
 
@@ -667,9 +667,9 @@ if __name__ == "__main__":
 
     print("-" * 100)
 
-    # # PyTorch Static 분리된 방식 실행
-    # execute_pytorch_static_split_model(tokenizer, model, inputs)
-    # print()
+    # PyTorch Static 분리된 방식 실행
+    execute_pytorch_static_split_model(tokenizer, model, inputs)
+    print()
 
     print("-" * 100)
 
