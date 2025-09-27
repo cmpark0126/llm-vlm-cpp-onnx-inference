@@ -2,18 +2,18 @@
 #include <sys/resource.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <opencv2/opencv.hpp>
+#include <random>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <numeric>
-#include <random>
-#include <algorithm>
 
 using json = nlohmann::json;
 
@@ -29,7 +29,7 @@ float uint16_to_float32(uint16_t h) {
             return *reinterpret_cast<float*>(&sign);
         } else {
             // Denormalized number
-            exponent = 0x38000000; // 2^-14 in float32
+            exponent = 0x38000000;  // 2^-14 in float32
             while ((mantissa & 0x0400) == 0) {
                 mantissa <<= 1;
                 exponent -= 0x00800000;
@@ -58,14 +58,17 @@ const int MAX_GEN_LEN = 128;
 const bool USE_SAMPLING = true;  // true for top-p sampling, false for argmax
 
 // Text embedding function
-std::vector<float> run_text_embedding(Ort::Session& text_emb_session, const std::vector<int64_t>& input_ids, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator) {
+std::vector<float> run_text_embedding(Ort::Session& text_emb_session,
+                                      const std::vector<int64_t>& input_ids,
+                                      Ort::MemoryInfo& memory_info,
+                                      Ort::AllocatorWithDefaultOptions& allocator) {
     // Get text embedding
     std::vector<int64_t> input_ids_copy(input_ids.begin(), input_ids.end());
     std::vector<int64_t> input_ids_shape = {1, static_cast<int64_t>(input_ids.size())};
 
-    auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(memory_info, input_ids_copy.data(),
-                                                            input_ids_copy.size(), input_ids_shape.data(),
-                                                            input_ids_shape.size());
+    auto text_input_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, input_ids_copy.data(), input_ids_copy.size(),
+                                          input_ids_shape.data(), input_ids_shape.size());
 
     // Get input/output names
     auto input_name_allocated = text_emb_session.GetInputNameAllocated(0, allocator);
@@ -79,8 +82,8 @@ std::vector<float> run_text_embedding(Ort::Session& text_emb_session, const std:
 
     // Run inference
     auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
-                                            text_input_values.data(), text_input_values.size(),
-                                            text_output_names.data(), text_output_names.size());
+                                             text_input_values.data(), text_input_values.size(),
+                                             text_output_names.data(), text_output_names.size());
 
     // Convert float16 output to float32
     auto text_shape = text_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
@@ -89,7 +92,8 @@ std::vector<float> run_text_embedding(Ort::Session& text_emb_session, const std:
     for (auto dim : text_shape) total_elements *= dim;
 
     // Get raw float16 data from ONNX output
-    const uint16_t* float16_raw_data = reinterpret_cast<const uint16_t*>(text_outputs[0].GetTensorData<void>());
+    const uint16_t* float16_raw_data =
+        reinterpret_cast<const uint16_t*>(text_outputs[0].GetTensorData<void>());
 
     // Convert to float32 for easier processing
     std::vector<float> hidden_states_float32;
@@ -103,12 +107,15 @@ std::vector<float> run_text_embedding(Ort::Session& text_emb_session, const std:
 }
 
 // Image embedding function
-std::vector<float> run_image_embedding(Ort::Session& image_emb_session, const std::vector<float>& image_tensor_data, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator) {
+std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
+                                       const std::vector<float>& image_tensor_data,
+                                       Ort::MemoryInfo& memory_info,
+                                       Ort::AllocatorWithDefaultOptions& allocator) {
     // Create image input tensor [1, 3, 224, 224]
     std::vector<int64_t> image_shape = {1, 3, 224, 224};
-    auto image_input_tensor = Ort::Value::CreateTensor<float>(memory_info, const_cast<float*>(image_tensor_data.data()),
-                                                            image_tensor_data.size(), image_shape.data(),
-                                                            image_shape.size());
+    auto image_input_tensor = Ort::Value::CreateTensor<float>(
+        memory_info, const_cast<float*>(image_tensor_data.data()), image_tensor_data.size(),
+        image_shape.data(), image_shape.size());
 
     // Get input/output names
     auto input_name_allocated = image_emb_session.GetInputNameAllocated(0, allocator);
@@ -121,9 +128,9 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session, const st
     image_input_values.push_back(std::move(image_input_tensor));
 
     // Run inference
-    auto image_outputs = image_emb_session.Run(Ort::RunOptions{nullptr}, image_input_names.data(),
-                                             image_input_values.data(), image_input_values.size(),
-                                             image_output_names.data(), image_output_names.size());
+    auto image_outputs = image_emb_session.Run(
+        Ort::RunOptions{nullptr}, image_input_names.data(), image_input_values.data(),
+        image_input_values.size(), image_output_names.data(), image_output_names.size());
 
     // Get output shape [1, 197, 896]
     auto image_shape_out = image_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
@@ -137,20 +144,22 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session, const st
     // Convert to vector
     std::vector<float> image_features_proj(image_data, image_data + total_elements);
 
-    std::cout << "Image embedding shape: [" << image_shape_out[0] << ", " << image_shape_out[1] << ", " << image_shape_out[2] << "]" << std::endl;
+    std::cout << "Image embedding shape: [" << image_shape_out[0] << ", " << image_shape_out[1]
+              << ", " << image_shape_out[2] << "]" << std::endl;
     std::cout << "Image embedding extracted successfully" << std::endl;
 
     return image_features_proj;
 }
 
-
 // Helper function to print text embedding
-void print_text_embedding(const std::vector<float>& hidden_states, const std::vector<int64_t>& shape) {
+void print_text_embedding(const std::vector<float>& hidden_states,
+                          const std::vector<int64_t>& shape) {
     int batch_size = shape[0];
     int seq_len = shape[1];
     int embed_dim = shape[2];
 
-    std::cout << "Text embedding shape: [" << batch_size << ", " << seq_len << ", " << embed_dim << "]" << std::endl;
+    std::cout << "Text embedding shape: [" << batch_size << ", " << seq_len << ", " << embed_dim
+              << "]" << std::endl;
 
     // Print first and last token embeddings
     std::cout << "First token embedding (first 10 values): ";
@@ -162,7 +171,8 @@ void print_text_embedding(const std::vector<float>& hidden_states, const std::ve
     std::cout << "Last token embedding (first 10 values): ";
     int last_token_offset = (seq_len - 1) * embed_dim;
     for (int i = 0; i < 10; i++) {
-        std::cout << std::fixed << std::setprecision(6) << hidden_states[last_token_offset + i] << " ";
+        std::cout << std::fixed << std::setprecision(6) << hidden_states[last_token_offset + i]
+                  << " ";
     }
     std::cout << std::endl;
 
@@ -179,7 +189,8 @@ void print_text_embedding(const std::vector<float>& hidden_states, const std::ve
 
     std::cout << "Embedding statistics:" << std::endl;
     std::cout << "  Sum: " << std::fixed << std::setprecision(6) << sum << std::endl;
-    std::cout << "  Mean: " << std::fixed << std::setprecision(6) << sum / hidden_states.size() << std::endl;
+    std::cout << "  Mean: " << std::fixed << std::setprecision(6) << sum / hidden_states.size()
+              << std::endl;
     std::cout << "  Min: " << std::fixed << std::setprecision(6) << min_val << std::endl;
     std::cout << "  Max: " << std::fixed << std::setprecision(6) << max_val << std::endl;
 }
@@ -322,17 +333,19 @@ std::vector<float> process_image(const std::string& image_path) {
 
         int current_shortest = std::min(image.cols, image.rows);
         float scale_factor = static_cast<float>(shortest_edge) / current_shortest;
-        int new_width = static_cast<int>(image.cols * scale_factor + 0.5f);  // Round to nearest
-        int new_height = static_cast<int>(image.rows * scale_factor + 0.5f); // Round to nearest
+        int new_width = static_cast<int>(image.cols * scale_factor + 0.5f);   // Round to nearest
+        int new_height = static_cast<int>(image.rows * scale_factor + 0.5f);  // Round to nearest
 
         // Ensure at least one dimension is >= 224
         if (new_width < shortest_edge && new_height < shortest_edge) {
-            scale_factor = static_cast<float>(shortest_edge) / current_shortest + 0.001f; // Add small epsilon
+            scale_factor =
+                static_cast<float>(shortest_edge) / current_shortest + 0.001f;  // Add small epsilon
             new_width = static_cast<int>(image.cols * scale_factor + 0.5f);
             new_height = static_cast<int>(image.rows * scale_factor + 0.5f);
         }
 
-        std::cout << "Scale factor: " << scale_factor << ", New size: " << new_width << "x" << new_height << std::endl;
+        std::cout << "Scale factor: " << scale_factor << ", New size: " << new_width << "x"
+                  << new_height << std::endl;
         cv::resize(image, image, cv::Size(new_width, new_height), 0, 0, cv::INTER_CUBIC);
     }
 
@@ -342,8 +355,8 @@ std::vector<float> process_image(const std::string& image_path) {
 
         // Ensure image is at least crop_size in both dimensions
         if (image.cols < crop_size || image.rows < crop_size) {
-            std::cerr << "Error: Image too small for cropping. Size: " << image.cols << "x" << image.rows
-                      << ", required: " << crop_size << "x" << crop_size << std::endl;
+            std::cerr << "Error: Image too small for cropping. Size: " << image.cols << "x"
+                      << image.rows << ", required: " << crop_size << "x" << crop_size << std::endl;
             exit(1);
         }
 
@@ -351,7 +364,8 @@ std::vector<float> process_image(const std::string& image_path) {
         int top = (image.rows - crop_size) / 2;
         cv::Rect crop_rect(left, top, crop_size, crop_size);
 
-        std::cout << "Crop rect: " << left << "," << top << " " << crop_size << "x" << crop_size << std::endl;
+        std::cout << "Crop rect: " << left << "," << top << " " << crop_size << "x" << crop_size
+                  << std::endl;
 
         image = image(crop_rect);
         std::cout << "After crop: " << image.cols << "x" << image.rows << std::endl;
@@ -389,7 +403,8 @@ std::vector<float> process_image(const std::string& image_path) {
         }
     }
 
-    std::cout << "Image processed: " << image_path << " -> shape [1, 3, " << crop_size << ", " << crop_size << "]" << std::endl;
+    std::cout << "Image processed: " << image_path << " -> shape [1, 3, " << crop_size << ", "
+              << crop_size << "]" << std::endl;
     return result;
 }
 
@@ -579,7 +594,12 @@ struct SimpleTokenizer {
 };
 
 // Prefill function
-std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session, const std::vector<float>& hidden_states_float32, int input_token_len, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator, const SimpleTokenizer& tokenizer) {
+std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session,
+                                                    const std::vector<float>& hidden_states_float32,
+                                                    int input_token_len,
+                                                    Ort::MemoryInfo& memory_info,
+                                                    Ort::AllocatorWithDefaultOptions& allocator,
+                                                    const SimpleTokenizer& tokenizer) {
     std::cout << "\nRunning prefill step..." << std::endl;
     auto decoder_start = std::chrono::high_resolution_clock::now();
 
@@ -609,35 +629,35 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
     // 1. attention_mask: int64[1, 28]
     std::vector<int64_t> attention_mask(input_token_len, 1);
     std::vector<int64_t> attention_mask_shape = {1, input_token_len};
-    auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, attention_mask.data(), attention_mask.size(),
-        attention_mask_shape.data(), attention_mask_shape.size());
+    auto attention_mask_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, attention_mask.data(), attention_mask.size(),
+                                          attention_mask_shape.data(), attention_mask_shape.size());
     decoder_input_values.push_back(std::move(attention_mask_tensor));
 
     // 2. position_ids: int64[1, 28]
     std::vector<int64_t> position_ids(input_token_len);
     std::iota(position_ids.begin(), position_ids.end(), 0);
     std::vector<int64_t> position_ids_shape = {1, input_token_len};
-    auto position_ids_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, position_ids.data(), position_ids.size(),
-        position_ids_shape.data(), position_ids_shape.size());
+    auto position_ids_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, position_ids.data(), position_ids.size(),
+                                          position_ids_shape.data(), position_ids_shape.size());
     decoder_input_values.push_back(std::move(position_ids_tensor));
 
     // 3. past_key_values.{0-23}.{key,value}: float32[1, 2, 0, 64] (48개)
-    std::vector<float> empty_kv_data; // Empty vector for [1, 2, 0, 64]
+    std::vector<float> empty_kv_data;  // Empty vector for [1, 2, 0, 64]
     std::vector<int64_t> empty_kv_shape = {1, 2, 0, 64};
 
     for (int i = 0; i < 24; i++) {
         // past_key_values.{i}.key
-        auto past_key_tensor = Ort::Value::CreateTensor<float>(
-            memory_info, empty_kv_data.data(), empty_kv_data.size(),
-            empty_kv_shape.data(), empty_kv_shape.size());
+        auto past_key_tensor =
+            Ort::Value::CreateTensor<float>(memory_info, empty_kv_data.data(), empty_kv_data.size(),
+                                            empty_kv_shape.data(), empty_kv_shape.size());
         decoder_input_values.push_back(std::move(past_key_tensor));
 
         // past_key_values.{i}.value
-        auto past_value_tensor = Ort::Value::CreateTensor<float>(
-            memory_info, empty_kv_data.data(), empty_kv_data.size(),
-            empty_kv_shape.data(), empty_kv_shape.size());
+        auto past_value_tensor =
+            Ort::Value::CreateTensor<float>(memory_info, empty_kv_data.data(), empty_kv_data.size(),
+                                            empty_kv_shape.data(), empty_kv_shape.size());
         decoder_input_values.push_back(std::move(past_value_tensor));
     }
 
@@ -652,20 +672,22 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
               << decoder_output_count << " outputs..." << std::endl;
 
     // Run prefill inference
-    auto prefill_outputs = decoding_session.Run(Ort::RunOptions{nullptr},
-                                               decoder_input_names.data(), decoder_input_values.data(), decoder_input_values.size(),
-                                               decoder_output_names.data(), decoder_output_count);
+    auto prefill_outputs = decoding_session.Run(
+        Ort::RunOptions{nullptr}, decoder_input_names.data(), decoder_input_values.data(),
+        decoder_input_values.size(), decoder_output_names.data(), decoder_output_count);
 
     auto decoder_end = std::chrono::high_resolution_clock::now();
     auto decoder_duration = std::chrono::duration<double>(decoder_end - decoder_start).count();
 
-    std::cout << "Prefill completed in " << std::fixed << std::setprecision(2) << decoder_duration << " sec" << std::endl;
+    std::cout << "Prefill completed in " << std::fixed << std::setprecision(2) << decoder_duration
+              << " sec" << std::endl;
 
     // Get logits and find next token using argmax
     auto logits_shape = prefill_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
     const float* logits_data = prefill_outputs[0].GetTensorData<float>();
 
-    std::cout << "Logits shape: [" << logits_shape[0] << ", " << logits_shape[1] << ", " << logits_shape[2] << "]" << std::endl;
+    std::cout << "Logits shape: [" << logits_shape[0] << ", " << logits_shape[1] << ", "
+              << logits_shape[2] << "]" << std::endl;
 
     // Get last token logits for next token prediction
     int vocab_size = logits_shape[2];
@@ -702,7 +724,12 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
 }
 
 // Decode function with performance measurement
-void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& decoding_session, std::vector<Ort::Value> past_kv_values, int first_token, int input_token_len, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator, const SimpleTokenizer& tokenizer, const std::string& output_path, std::vector<double>& token_times_ms) {
+void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& decoding_session,
+                                 std::vector<Ort::Value> past_kv_values, int first_token,
+                                 int input_token_len, Ort::MemoryInfo& memory_info,
+                                 Ort::AllocatorWithDefaultOptions& allocator,
+                                 const SimpleTokenizer& tokenizer, const std::string& output_path,
+                                 std::vector<double>& token_times_ms) {
     std::cout << "\nRunning decode step..." << std::endl;
     auto decode_start = std::chrono::high_resolution_clock::now();
 
@@ -716,7 +743,8 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
         int64_t token_start_ms = get_time_ms();
 
         // Get next token embedding
-        auto next_hidden_states = run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
+        auto next_hidden_states =
+            run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
 
         // Prepare decode inputs
         std::vector<Ort::Value> decode_input_values;
@@ -725,19 +753,19 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
         std::vector<int64_t> attention_mask = {1};
         std::vector<int64_t> attention_mask_shape = {1, 1};
         auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
-            memory_info, attention_mask.data(), attention_mask.size(),
-            attention_mask_shape.data(), attention_mask_shape.size());
+            memory_info, attention_mask.data(), attention_mask.size(), attention_mask_shape.data(),
+            attention_mask_shape.size());
         decode_input_values.push_back(std::move(attention_mask_tensor));
 
         // 2. position_ids: [1, 1] with current position
         std::vector<int64_t> position_ids = {current_token_len};
         std::vector<int64_t> position_ids_shape = {1, 1};
-        auto position_ids_tensor = Ort::Value::CreateTensor<int64_t>(
-            memory_info, position_ids.data(), position_ids.size(),
-            position_ids_shape.data(), position_ids_shape.size());
+        auto position_ids_tensor =
+            Ort::Value::CreateTensor<int64_t>(memory_info, position_ids.data(), position_ids.size(),
+                                              position_ids_shape.data(), position_ids_shape.size());
         decode_input_values.push_back(std::move(position_ids_tensor));
 
-        current_token_len++; // Increment after setting position_ids
+        current_token_len++;  // Increment after setting position_ids
 
         // 3. past_key_values from previous step
         // Store kv_data vectors to ensure memory lifetime
@@ -781,14 +809,15 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
         }
 
         for (size_t i = 0; i < decoder_output_count; i++) {
-            decoder_output_name_ptrs.push_back(decoding_session.GetOutputNameAllocated(i, allocator));
+            decoder_output_name_ptrs.push_back(
+                decoding_session.GetOutputNameAllocated(i, allocator));
             decoder_output_names.push_back(decoder_output_name_ptrs.back().get());
         }
 
         // Run decode inference
-        auto decode_outputs = decoding_session.Run(Ort::RunOptions{nullptr},
-                                                  decoder_input_names.data(), decode_input_values.data(), decode_input_values.size(),
-                                                  decoder_output_names.data(), decoder_output_count);
+        auto decode_outputs = decoding_session.Run(
+            Ort::RunOptions{nullptr}, decoder_input_names.data(), decode_input_values.data(),
+            decode_input_values.size(), decoder_output_names.data(), decoder_output_count);
 
         // Update past_kv_values for next iteration
         past_kv_values.clear();
@@ -838,8 +867,8 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
     auto decode_duration = std::chrono::duration<double>(decode_end - decode_start).count();
 
     std::cout << "\n\nGeneration completed!" << std::endl;
-    std::cout << "Generated " << generated_ids.size() << " tokens in " << std::fixed << std::setprecision(2)
-              << decode_duration << " sec" << std::endl;
+    std::cout << "Generated " << generated_ids.size() << " tokens in " << std::fixed
+              << std::setprecision(2) << decode_duration << " sec" << std::endl;
     std::cout << "Decode throughput: " << std::fixed << std::setprecision(2)
               << generated_ids.size() / decode_duration << " tokens/sec" << std::endl;
 
@@ -884,8 +913,8 @@ int main() {
     auto load_end = std::chrono::high_resolution_clock::now();
     auto load_duration = std::chrono::duration<double>(load_end - load_start).count();
 
-    std::cout << "Inference sessions are loaded. Loading takes " << std::fixed << std::setprecision(2)
-              << load_duration << " sec" << std::endl;
+    std::cout << "Inference sessions are loaded. Loading takes " << std::fixed
+              << std::setprecision(2) << load_duration << " sec" << std::endl;
 
     std::cout << "Successfully loaded:" << std::endl;
     std::cout << "  - Vision encoder: " << vision_encoder_path << std::endl;
@@ -944,13 +973,17 @@ int main() {
     auto prefill_start = std::chrono::high_resolution_clock::now();
 
     // Create prompt with image token (similar to run_vlm.py line 30)
-    std::string prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n";
+    std::string prompt =
+        "<|im_start|>system\nYou are a helpful "
+        "assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is "
+        "from?<|im_end|>\n<|im_start|>assistant\n";
     std::cout << "Prompt created: \"" << escape_special_chars(prompt) << "\"" << std::endl;
 
     // Tokenize input prompt (similar to run_vlm.py line 121)
     std::cout << "Preprocessing prompt..." << std::endl;
     std::string preprocessed_prompt = tokenizer.preprocess(prompt);
-    std::cout << "Preprocessed: \"" << escape_special_chars(preprocessed_prompt) << "\"" << std::endl;
+    std::cout << "Preprocessed: \"" << escape_special_chars(preprocessed_prompt) << "\""
+              << std::endl;
 
     auto input_ids = tokenizer.encode(preprocessed_prompt);
     std::cout << "Input IDs (length: " << input_ids.size() << "): ";
@@ -981,7 +1014,8 @@ int main() {
     Ort::AllocatorWithDefaultOptions allocator;
 
     // Get image embedding (similar to run_vlm.py lines 127-128)
-    auto image_features_proj = run_image_embedding(image_emb_session, image_tensor_data, memory_info, allocator);
+    auto image_features_proj =
+        run_image_embedding(image_emb_session, image_tensor_data, memory_info, allocator);
 
     // Get text embedding (similar to run_vlm.py lines 131-132)
     auto text_embeddings = run_text_embedding(text_emb_session, input_ids, memory_info, allocator);
@@ -1008,12 +1042,16 @@ int main() {
 
     // Merge text embedding and image embedding (similar to run_vlm.py line 139)
     std::vector<float> hidden_states_float32;
-    hidden_states_float32.reserve(pre_image_text_emb.size() + image_features_proj.size() + post_image_text_emb.size());
+    hidden_states_float32.reserve(pre_image_text_emb.size() + image_features_proj.size() +
+                                  post_image_text_emb.size());
 
     // Concatenate: pre_image + image_features + post_image
-    hidden_states_float32.insert(hidden_states_float32.end(), pre_image_text_emb.begin(), pre_image_text_emb.end());
-    hidden_states_float32.insert(hidden_states_float32.end(), image_features_proj.begin(), image_features_proj.end());
-    hidden_states_float32.insert(hidden_states_float32.end(), post_image_text_emb.begin(), post_image_text_emb.end());
+    hidden_states_float32.insert(hidden_states_float32.end(), pre_image_text_emb.begin(),
+                                 pre_image_text_emb.end());
+    hidden_states_float32.insert(hidden_states_float32.end(), image_features_proj.begin(),
+                                 image_features_proj.end());
+    hidden_states_float32.insert(hidden_states_float32.end(), post_image_text_emb.begin(),
+                                 post_image_text_emb.end());
 
     // Calculate new token length (similar to run_vlm.py line 140)
     int input_token_len = image_token_pos + 197 + (input_ids.size() - image_token_pos - 1);
@@ -1029,7 +1067,8 @@ int main() {
     print_text_embedding(hidden_states_float32, text_shape);
 
     // 5. Prefill Step (similar to run_vlm.py lines 187-206)
-    auto prefill_result = run_prefill(decoding_session, hidden_states_float32, input_token_len, memory_info, allocator, tokenizer);
+    auto prefill_result = run_prefill(decoding_session, hidden_states_float32, input_token_len,
+                                      memory_info, allocator, tokenizer);
     int next_token = prefill_result.first;
     std::vector<Ort::Value> past_kv_values = std::move(prefill_result.second);
 
@@ -1044,7 +1083,9 @@ int main() {
     std::vector<double> token_times_ms;
 
     // Modified run_decode call to return performance data
-    run_decode_with_performance(text_emb_session, decoding_session, std::move(past_kv_values), next_token, input_token_len, memory_info, allocator, tokenizer, output_path, token_times_ms);
+    run_decode_with_performance(text_emb_session, decoding_session, std::move(past_kv_values),
+                                next_token, input_token_len, memory_info, allocator, tokenizer,
+                                output_path, token_times_ms);
 
     // Performance measurements
     int64_t generation_end_ms = get_time_ms();
@@ -1055,17 +1096,22 @@ int main() {
     for (size_t i = 0; i < token_times_ms.size(); i++) {
         total_subsequent_time += token_times_ms[i];
     }
-    double tpot_ms = token_times_ms.size() > 0 ? total_subsequent_time / token_times_ms.size() : 0.0;
+    double tpot_ms =
+        token_times_ms.size() > 0 ? total_subsequent_time / token_times_ms.size() : 0.0;
 
     // Get peak memory usage
     size_t peak_memory = get_peak_memory_usage();
 
     // Print performance metrics
     std::cout << "\n=== Performance Metrics ===" << std::endl;
-    std::cout << "Time-to-First-Token (TTFT): " << std::fixed << std::setprecision(2) << ttft_ms << " ms" << std::endl;
-    std::cout << "Time-Per-Output-Token (TPOT): " << std::fixed << std::setprecision(2) << tpot_ms << " ms" << std::endl;
-    std::cout << "Peak Memory Usage: " << std::fixed << std::setprecision(2) << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Total Generation Time: " << std::fixed << std::setprecision(2) << total_generation_time_ms << " ms" << std::endl;
+    std::cout << "Time-to-First-Token (TTFT): " << std::fixed << std::setprecision(2) << ttft_ms
+              << " ms" << std::endl;
+    std::cout << "Time-Per-Output-Token (TPOT): " << std::fixed << std::setprecision(2) << tpot_ms
+              << " ms" << std::endl;
+    std::cout << "Peak Memory Usage: " << std::fixed << std::setprecision(2)
+              << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "Total Generation Time: " << std::fixed << std::setprecision(2)
+              << total_generation_time_ms << " ms" << std::endl;
     std::cout << "Total Tokens Generated: " << (1 + token_times_ms.size()) << std::endl;
 
     return 0;
