@@ -518,13 +518,14 @@ int main() {
 
     // Create cache_position for decode
     std::vector<int64_t> cache_position = {current_position - 1};  // 0-indexed cache position
-    std::vector<int64_t> cache_position_shape = {1};  // rank 1 tensor
-    auto cache_position_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, cache_position.data(), cache_position.size(),
-        cache_position_shape.data(), cache_position_shape.size());
+    std::vector<int64_t> cache_position_shape = {1};               // rank 1 tensor
+    auto cache_position_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, cache_position.data(), cache_position.size(),
+                                          cache_position_shape.data(), cache_position_shape.size());
 
     // Prepare decode input names and values
-    std::vector<const char*> decode_input_names = {"input_ids", "position_ids", "attention_mask", "cache_position"};
+    std::vector<const char*> decode_input_names = {"input_ids", "position_ids", "attention_mask",
+                                                   "cache_position"};
     std::vector<std::string> kv_input_names_storage;
 
     // Add past KV cache input names
@@ -636,7 +637,8 @@ int main() {
             // present is [1, num_heads, 1, head_dim]
             for (int64_t h = 0; h < present_shape[1]; h++) {
                 for (int64_t d = 0; d < present_shape[3]; d++) {
-                    size_t idx = h * MAX_SEQ_LEN * present_shape[3] + cache_pos * present_shape[3] + d;
+                    size_t idx =
+                        h * MAX_SEQ_LEN * present_shape[3] + cache_pos * present_shape[3] + d;
                     cache_data[idx] = present_data[idx];
                 }
             }
@@ -672,8 +674,8 @@ int main() {
             decode_attention_shape.data(), decode_attention_shape.size());
 
         auto new_cache_position_tensor = Ort::Value::CreateTensor<int64_t>(
-            memory_info, cache_position.data(), cache_position.size(),
-            cache_position_shape.data(), cache_position_shape.size());
+            memory_info, cache_position.data(), cache_position.size(), cache_position_shape.data(),
+            cache_position_shape.size());
 
         decode_input_values.push_back(std::move(new_decode_input_tensor));
         decode_input_values.push_back(std::move(new_decode_position_tensor));
