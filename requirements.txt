@@ -22,6 +22,7 @@ onnxruntime_extensions==0.14.0
 onnxscript==0.5.2
 packaging==25.0
 pfzy==0.3.4
+pillow==11.3.0
 prompt_toolkit==3.0.52
 protobuf==6.32.1
 Pygments==2.11.2
@@ -34,7 +35,6 @@ tokenizers==0.22.1
 torch==2.8.0
 tqdm==4.67.1
 transformers==4.56.2
-triton==3.4.0
 typing_extensions==4.15.0
 urllib3==2.5.0
 wcwidth==0.2.14

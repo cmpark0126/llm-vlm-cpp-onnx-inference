@@ -1,5 +1,7 @@
 FROM ubuntu:22.04
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -12,6 +14,8 @@ RUN apt-get update && apt-get install -y \
     clang-format \
     clang-tidy \
     htop \
+    libopencv-dev \
+    python3-opencv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies for baseline execution
