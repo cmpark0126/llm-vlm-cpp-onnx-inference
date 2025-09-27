@@ -523,7 +523,7 @@ struct SimpleTokenizer {
 };
 
 // Prefill function
-int run_prefill(Ort::Session& decoding_session, const std::vector<float>& hidden_states_float32, int input_token_len, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator, const SimpleTokenizer& tokenizer) {
+std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session, const std::vector<float>& hidden_states_float32, int input_token_len, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator, const SimpleTokenizer& tokenizer) {
     std::cout << "\nRunning prefill step..." << std::endl;
     auto decoder_start = std::chrono::high_resolution_clock::now();
 
@@ -632,7 +632,13 @@ int run_prefill(Ort::Session& decoding_session, const std::vector<float>& hidden
     std::cout << "Prefill step completed. Throughput: " << std::fixed << std::setprecision(2)
               << input_token_len / decoder_duration << " tokens/sec" << std::endl;
 
-    return next_token;
+    // Return past_kv_values (outputs[1:]) for decode step
+    std::vector<Ort::Value> past_kv_values;
+    for (size_t i = 1; i < prefill_outputs.size(); i++) {
+        past_kv_values.push_back(std::move(prefill_outputs[i]));
+    }
+
+    return std::make_pair(next_token, std::move(past_kv_values));
 }
 
 int main() {
@@ -750,8 +756,151 @@ int main() {
     print_text_embedding(hidden_states_float32, text_shape);
 
     // 5. Prefill Step (similar to run_vlm.py lines 187-206)
-    int next_token = run_prefill(decoding_session, hidden_states_float32, input_token_len, memory_info, allocator, tokenizer);
+    auto prefill_result = run_prefill(decoding_session, hidden_states_float32, input_token_len, memory_info, allocator, tokenizer);
+    int next_token = prefill_result.first;
+    std::vector<Ort::Value> past_kv_values = std::move(prefill_result.second);
 
     std::cout << "\nVLM prefill completed successfully!" << std::endl;
+
+    // 6. Decode Step (similar to run_vlm.py lines 216-271)
+    std::cout << "\nRunning decode step..." << std::endl;
+    auto decode_start = std::chrono::high_resolution_clock::now();
+
+    std::vector<int64_t> generated_ids = {next_token};
+    int current_token_len = input_token_len;
+
+    for (int step = 0; step < MAX_GEN_LEN; step++) {
+        // Get next token embedding
+        auto next_hidden_states = run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
+
+        // Prepare decode inputs
+        std::vector<Ort::Value> decode_input_values;
+
+        // 1. attention_mask: [1, 1]
+        std::vector<int64_t> attention_mask = {1};
+        std::vector<int64_t> attention_mask_shape = {1, 1};
+        auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
+            memory_info, attention_mask.data(), attention_mask.size(),
+            attention_mask_shape.data(), attention_mask_shape.size());
+        decode_input_values.push_back(std::move(attention_mask_tensor));
+
+        // 2. position_ids: [1, 1] with current position
+        std::vector<int64_t> position_ids = {current_token_len};
+        std::vector<int64_t> position_ids_shape = {1, 1};
+        auto position_ids_tensor = Ort::Value::CreateTensor<int64_t>(
+            memory_info, position_ids.data(), position_ids.size(),
+            position_ids_shape.data(), position_ids_shape.size());
+        decode_input_values.push_back(std::move(position_ids_tensor));
+
+        current_token_len++; // Increment after setting position_ids
+
+        // 3. past_key_values from previous step
+        // Store kv_data vectors to ensure memory lifetime
+        std::vector<std::vector<float>> kv_data_storage;
+        kv_data_storage.reserve(past_kv_values.size());
+
+        for (size_t i = 0; i < past_kv_values.size(); i++) {
+            auto shape = past_kv_values[i].GetTensorTypeAndShapeInfo().GetShape();
+            const float* data = past_kv_values[i].GetTensorData<float>();
+            size_t element_count = 1;
+            for (auto dim : shape) element_count *= dim;
+
+            // Store data in persistent vector
+            kv_data_storage.emplace_back(data, data + element_count);
+
+            auto kv_tensor = Ort::Value::CreateTensor<float>(
+                memory_info, kv_data_storage.back().data(), kv_data_storage.back().size(),
+                shape.data(), shape.size());
+            decode_input_values.push_back(std::move(kv_tensor));
+        }
+
+        // 4. hidden_states: [1, 1, 896]
+        std::vector<int64_t> hidden_states_shape = {1, 1, 896};
+        auto hidden_states_tensor = Ort::Value::CreateTensor<float>(
+            memory_info, const_cast<float*>(next_hidden_states.data()), next_hidden_states.size(),
+            hidden_states_shape.data(), hidden_states_shape.size());
+        decode_input_values.push_back(std::move(hidden_states_tensor));
+
+        // Get input/output names
+        size_t decoder_input_count = decoding_session.GetInputCount();
+        size_t decoder_output_count = decoding_session.GetOutputCount();
+
+        std::vector<Ort::AllocatedStringPtr> decoder_input_name_ptrs;
+        std::vector<Ort::AllocatedStringPtr> decoder_output_name_ptrs;
+        std::vector<const char*> decoder_input_names;
+        std::vector<const char*> decoder_output_names;
+
+        for (size_t i = 0; i < decoder_input_count; i++) {
+            decoder_input_name_ptrs.push_back(decoding_session.GetInputNameAllocated(i, allocator));
+            decoder_input_names.push_back(decoder_input_name_ptrs.back().get());
+        }
+
+        for (size_t i = 0; i < decoder_output_count; i++) {
+            decoder_output_name_ptrs.push_back(decoding_session.GetOutputNameAllocated(i, allocator));
+            decoder_output_names.push_back(decoder_output_name_ptrs.back().get());
+        }
+
+        // Run decode inference
+        auto decode_outputs = decoding_session.Run(Ort::RunOptions{nullptr},
+                                                  decoder_input_names.data(), decode_input_values.data(), decode_input_values.size(),
+                                                  decoder_output_names.data(), decoder_output_count);
+
+        // Update past_kv_values for next iteration
+        past_kv_values.clear();
+        for (size_t i = 1; i < decode_outputs.size(); i++) {
+            past_kv_values.push_back(std::move(decode_outputs[i]));
+        }
+
+        // Get next token
+        auto logits_shape = decode_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+        const float* logits_data = decode_outputs[0].GetTensorData<float>();
+        int vocab_size = logits_shape[2];
+        const float* last_token_logits = logits_data;
+
+        // Find argmax
+        next_token = 0;
+        float max_logit = last_token_logits[0];
+        for (int i = 1; i < vocab_size; i++) {
+            if (last_token_logits[i] > max_logit) {
+                max_logit = last_token_logits[i];
+                next_token = i;
+            }
+        }
+
+        // Check for EOS token (assuming EOS token ID is 151645 based on common patterns)
+        if (next_token == 151645) {
+            std::cout << "EOS token reached, stopping generation" << std::endl;
+            break;
+        }
+
+        std::cout << "Step " << step + 1 << ": " << tokenizer.decode({next_token}) << std::flush;
+
+        // Save generated token (at the end like Python code)
+        generated_ids.push_back(next_token);
+    }
+
+    auto decode_end = std::chrono::high_resolution_clock::now();
+    auto decode_duration = std::chrono::duration<double>(decode_end - decode_start).count();
+
+    std::cout << "\n\nGeneration completed!" << std::endl;
+    std::cout << "Generated " << generated_ids.size() << " tokens in " << std::fixed << std::setprecision(2)
+              << decode_duration << " sec" << std::endl;
+    std::cout << "Decode throughput: " << std::fixed << std::setprecision(2)
+              << generated_ids.size() / decode_duration << " tokens/sec" << std::endl;
+
+    // Decode full response
+    std::string response = tokenizer.decode(generated_ids);
+    std::cout << "\nFull response: \"" << response << "\"" << std::endl;
+
+    // Write to output file
+    std::ofstream output_file(output_path);
+    if (output_file.is_open()) {
+        output_file << response;
+        output_file.close();
+        std::cout << "Response written to: " << output_path << std::endl;
+    } else {
+        std::cerr << "Error: Could not write to output file: " << output_path << std::endl;
+    }
+
     return 0;
 }
