@@ -458,21 +458,31 @@ int main() {
     }
     std::cout << "]" << std::endl;
 
-    // // Get text embedding (similar to run_vlm.py lines 145-147)
-    // std::vector<int64_t> text_input_shape = {1, static_cast<int64_t>(input_ids.size())};
-    // auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(memory_info, input_ids.data(),
-    //                                                            input_ids.size(), text_input_shape.data(),
-    //                                                            text_input_shape.size());
+    // Get text embedding (similar to run_vlm.py lines 145-147)
+    std::vector<int64_t> text_input_shape = {1, static_cast<int64_t>(input_ids.size())};
+    auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(memory_info, input_ids.data(),
+                                                               input_ids.size(), text_input_shape.data(),
+                                                               text_input_shape.size());
 
-    // std::vector<const char*> text_input_names = {"input_ids"};
-    // std::vector<Ort::Value> text_input_values;
-    // text_input_values.push_back(std::move(text_input_tensor));
+    std::vector<const char*> text_input_names = {"input_ids"};
+    std::vector<const char*> text_output_names = {"hidden_states"};
+    std::vector<Ort::Value> text_input_values;
+    text_input_values.push_back(std::move(text_input_tensor));
 
-    // auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
-    //                                          text_input_values.data(), text_input_values.size(),
-    //                                          nullptr, 0);
+    auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
+                                             text_input_values.data(), text_input_values.size(),
+                                             text_output_names.data(), text_output_names.size());
 
-    // std::cout << "Text embedding completed, got " << text_outputs.size() << " outputs" << std::endl;
+    std::cout << "Text embedding completed, got " << text_outputs.size() << " outputs" << std::endl;
+
+    // Check output shape
+    auto text_shape = text_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+    std::cout << "Text output shape: [";
+    for (size_t i = 0; i < text_shape.size(); i++) {
+        std::cout << text_shape[i];
+        if (i < text_shape.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]" << std::endl;
 
     // 6. Top-P Sampling Function (similar to run_vlm.py lines 93-107)
     //    - Sort logits in descending order
