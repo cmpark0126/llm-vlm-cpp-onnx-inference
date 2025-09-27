@@ -14,23 +14,11 @@ RUN apt-get update && apt-get install -y \
     htop \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ONNX Runtime - detect architecture and install appropriate version
-RUN ARCH=$(uname -m) && \
-    if [ "$ARCH" = "aarch64" ]; then \
-        ONNX_ARCH="aarch64"; \
-    elif [ "$ARCH" = "x86_64" ]; then \
-        ONNX_ARCH="x64"; \
-    else \
-        echo "Unsupported architecture: $ARCH" && exit 1; \
-    fi && \
-    wget https://github.com/microsoft/onnxruntime/releases/download/v1.19.0/onnxruntime-linux-${ONNX_ARCH}-1.19.0.tgz \
-    && tar -xzf onnxruntime-linux-${ONNX_ARCH}-1.19.0.tgz
-
 # Install Python dependencies for baseline execution
 COPY requirements.txt .
 RUN python3 -m venv venv && \
-    . venv/bin/activate && \
-    pip install -r requirements.txt
+    /venv/bin/python -m pip install --upgrade pip && \
+    /venv/bin/pip install -r requirements.txt
 
 WORKDIR /workspace
 

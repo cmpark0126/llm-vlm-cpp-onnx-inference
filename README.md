@@ -6,9 +6,11 @@ Local 환경에서:
 docker build -t llm-vlm-dev .
 docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -d llm-vlm-dev sleep infinity
 docker exec -it llm-vlm-dev /bin/bash
-. .venv/bin/activate # Docker 컨테이너 내에서
-...
-exit # Docker 컨테이너 내에서
+$ chmod +x install_onnxruntime.sh
+$ ./install_onnxruntime.sh # Docker 컨테이너 내에서
+$ . .venv/bin/activate # Docker 컨테이너 내에서
+$ ...
+$ exit # Docker 컨테이너 내에서
 docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ```
 
@@ -31,10 +33,12 @@ cd problem1-llm
 ./run.sh
 cd ..
 
-# 문제 2: Static graph export & 텍스트 생성
+# 문제 2: Static graph export & 텍스트 생성 (TODO: single script)
 cd problem2-static
 hf auth login
-python3 export_onnx.py
+python3 export_onnx_prefill.py
+python3 export_onnx_decode.py
+python3 test_gemma.py
 ./run.sh
 cd ..
 
