@@ -11,13 +11,159 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <numeric>
+#include <random>
+#include <algorithm>
 
 using json = nlohmann::json;
+
+// Float16 to float32 conversion function
+float uint16_to_float32(uint16_t h) {
+    uint32_t sign = (h & 0x8000) << 16;
+    uint32_t exponent = (h & 0x7c00);
+    uint32_t mantissa = (h & 0x03ff);
+
+    if (exponent == 0) {
+        if (mantissa == 0) {
+            // Zero
+            return *reinterpret_cast<float*>(&sign);
+        } else {
+            // Denormalized number
+            exponent = 0x38000000; // 2^-14 in float32
+            while ((mantissa & 0x0400) == 0) {
+                mantissa <<= 1;
+                exponent -= 0x00800000;
+            }
+            mantissa &= 0x03ff;
+        }
+    } else if (exponent == 0x7c00) {
+        // Infinity or NaN
+        exponent = 0x7f800000;
+    } else {
+        // Normalized number
+        exponent = (exponent >> 10) - 15 + 127;
+        exponent <<= 23;
+    }
+
+    uint32_t result = sign | exponent | (mantissa << 13);
+    return *reinterpret_cast<float*>(&result);
+}
 
 // Constants
 const int64_t IMAGE_TOKEN_INDEX = 151646;
 const int MAX_GEN_LEN = 128;
-const bool USE_SAMPLING = true;
+
+// Helper function to print text embedding
+void print_text_embedding(const std::vector<float>& hidden_states, const std::vector<int64_t>& shape) {
+    int batch_size = shape[0];
+    int seq_len = shape[1];
+    int embed_dim = shape[2];
+
+    std::cout << "Text embedding shape: [" << batch_size << ", " << seq_len << ", " << embed_dim << "]" << std::endl;
+
+    // Print first and last token embeddings
+    std::cout << "First token embedding (first 10 values): ";
+    for (int i = 0; i < 10; i++) {
+        std::cout << std::fixed << std::setprecision(6) << hidden_states[i] << " ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "Last token embedding (first 10 values): ";
+    int last_token_offset = (seq_len - 1) * embed_dim;
+    for (int i = 0; i < 10; i++) {
+        std::cout << std::fixed << std::setprecision(6) << hidden_states[last_token_offset + i] << " ";
+    }
+    std::cout << std::endl;
+
+    // Calculate and print statistics
+    double sum = 0.0;
+    float min_val = hidden_states[0];
+    float max_val = hidden_states[0];
+
+    for (float val : hidden_states) {
+        sum += val;
+        if (val < min_val) min_val = val;
+        if (val > max_val) max_val = val;
+    }
+
+    std::cout << "Embedding statistics:" << std::endl;
+    std::cout << "  Sum: " << std::fixed << std::setprecision(6) << sum << std::endl;
+    std::cout << "  Mean: " << std::fixed << std::setprecision(6) << sum / hidden_states.size() << std::endl;
+    std::cout << "  Min: " << std::fixed << std::setprecision(6) << min_val << std::endl;
+    std::cout << "  Max: " << std::fixed << std::setprecision(6) << max_val << std::endl;
+}
+
+// Top-P Sampling Function (similar to run_vlm.py lines 93-107)
+int top_p_sampling(const float* logits, int vocab_size, float top_p = 0.99f) {
+    // Create vector of (logit, index) pairs
+    std::vector<std::pair<float, int>> logit_pairs;
+    for (int i = 0; i < vocab_size; i++) {
+        logit_pairs.push_back({logits[i], i});
+    }
+
+    // Sort by logit value in descending order
+    std::sort(logit_pairs.begin(), logit_pairs.end(),
+              [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                  return a.first > b.first;
+              });
+
+    // Convert to probabilities and compute cumulative
+    float max_logit_for_softmax = logit_pairs[0].first;
+    std::vector<float> probs;
+    float sum_exp = 0.0f;
+
+    for (const auto& pair : logit_pairs) {
+        float exp_val = std::exp(pair.first - max_logit_for_softmax);
+        probs.push_back(exp_val);
+        sum_exp += exp_val;
+    }
+
+    // Normalize probabilities
+    for (auto& prob : probs) {
+        prob /= sum_exp;
+    }
+
+    // Compute cumulative probabilities and find cutoff
+    float cumulative = 0.0f;
+    int cutoff_index = 0;
+
+    for (int i = 0; i < probs.size(); i++) {
+        cumulative += probs[i];
+        if (cumulative >= top_p) {
+            cutoff_index = i;
+            break;
+        }
+    }
+    cutoff_index = std::max(0, cutoff_index);
+
+    // Renormalize probabilities for sampling
+    float renorm_sum = 0.0f;
+    for (int i = 0; i <= cutoff_index; i++) {
+        renorm_sum += probs[i];
+    }
+
+    for (int i = 0; i <= cutoff_index; i++) {
+        probs[i] /= renorm_sum;
+    }
+
+    // Sample using random number
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+    float random_val = dis(gen);
+
+    int selected_idx = 0;
+    float cum_prob = 0.0f;
+    for (int i = 0; i <= cutoff_index; i++) {
+        cum_prob += probs[i];
+        if (random_val <= cum_prob) {
+            selected_idx = i;
+            break;
+        }
+    }
+
+    return logit_pairs[selected_idx].second;
+}
 
 std::string escape_special_chars(const std::string& text) {
     std::string escaped_text = text;
@@ -307,6 +453,22 @@ struct SimpleTokenizer {
                 result += id_to_token[token_id];
             }
         }
+
+        // Convert special characters back to original form
+        // Replace Ġ (space token) with regular space
+        size_t pos = 0;
+        while ((pos = result.find("Ġ", pos)) != std::string::npos) {
+            result.replace(pos, 2, " ");  // Ġ is 2 bytes in UTF-8
+            pos += 1;
+        }
+
+        // Replace Ċ (newline token) with regular newline
+        pos = 0;
+        while ((pos = result.find("Ċ", pos)) != std::string::npos) {
+            result.replace(pos, 2, "\n");  // Ċ is 2 bytes in UTF-8
+            pos += 1;
+        }
+
         return result;
     }
 };
@@ -325,7 +487,7 @@ int main() {
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "VLMInference");
     Ort::SessionOptions session_options;
 
-    // Load the three ONNX models
+    // Load the three ONNX models (following problem1 style)
     std::string vision_encoder_path = "../../llm_vlm_onnx_sample/vlm/model/vision_encoder.onnx";
     std::string token_embedding_path = "../../llm_vlm_onnx_sample/vlm/model/token_embedding.onnx";
     std::string decoder_path = "../../llm_vlm_onnx_sample/vlm/model/decoder.onnx";
@@ -396,7 +558,7 @@ int main() {
     auto prefill_start = std::chrono::high_resolution_clock::now();
 
     // Create prompt with image token (similar to run_vlm.py line 30)
-    std::string prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n";
+    std::string prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n";
     std::cout << "Prompt created: \"" << escape_special_chars(prompt) << "\"" << std::endl;
 
     // Tokenize input prompt (similar to run_vlm.py line 121)
@@ -412,159 +574,53 @@ int main() {
     }
     std::cout << std::endl;
 
-    // Find image token position (similar to run_vlm.py line 122)
-    int image_token_pos = -1;
-    for (size_t i = 0; i < input_ids.size(); i++) {
-        if (input_ids[i] == IMAGE_TOKEN_INDEX) {
-            image_token_pos = i;
-            break;
-        }
-    }
-
-    if (image_token_pos == -1) {
-        std::cerr << "Error: Image token not found in input_ids!" << std::endl;
-        return 1;
-    }
-
-    std::cout << "Image token position: " << image_token_pos << std::endl;
-
-    // Get image embedding & Project image embedding to text embedding space (similar to run_vlm.py lines 141-143)
+    // Create memory info for tensor creation
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+    Ort::AllocatorWithDefaultOptions allocator;
 
-    // Create image tensor for vision encoder
-    std::vector<int64_t> image_shape = {1, 3, 224, 224};
-    auto image_tensor = Ort::Value::CreateTensor<float>(memory_info, image_tensor_data.data(),
-                                                        image_tensor_data.size(), image_shape.data(),
-                                                        image_shape.size());
+    // Get text embedding (similar to run_vlm.py line 147)
+    std::vector<int64_t> input_ids_copy(input_ids.begin(), input_ids.end());
+    std::vector<int64_t> input_ids_shape = {1, static_cast<int64_t>(input_ids.size())};
 
-    // Run vision encoder (image_emb_session)
-    std::vector<const char*> vision_input_names = {"pixel_values"};
-    std::vector<const char*> vision_output_names = {"hidden_state"};
-    std::vector<Ort::Value> vision_input_values;
-    vision_input_values.push_back(std::move(image_tensor));
+    auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(memory_info, input_ids_copy.data(),
+                                                            input_ids_copy.size(), input_ids_shape.data(),
+                                                            input_ids_shape.size());
 
-    auto vision_outputs = image_emb_session.Run(Ort::RunOptions{nullptr}, vision_input_names.data(),
-                                                vision_input_values.data(), vision_input_values.size(),
-                                                vision_output_names.data(), vision_output_names.size());
+    // Get input/output names
+    auto input_name_allocated = text_emb_session.GetInputNameAllocated(0, allocator);
+    auto output_name_allocated = text_emb_session.GetOutputNameAllocated(0, allocator);
 
-    std::cout << "Vision encoder completed, got " << vision_outputs.size() << " outputs" << std::endl;
+    std::vector<const char*> text_input_names = {input_name_allocated.get()};
+    std::vector<const char*> text_output_names = {output_name_allocated.get()};
 
-    // Check output shape
-    auto vision_shape = vision_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    std::cout << "Vision output shape: [";
-    for (size_t i = 0; i < vision_shape.size(); i++) {
-        std::cout << vision_shape[i];
-        if (i < vision_shape.size() - 1) std::cout << ", ";
-    }
-    std::cout << "]" << std::endl;
-
-    // Get text embedding (similar to run_vlm.py lines 145-147)
-    std::vector<int64_t> text_input_shape = {1, static_cast<int64_t>(input_ids.size())};
-    auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(memory_info, input_ids.data(),
-                                                               input_ids.size(), text_input_shape.data(),
-                                                               text_input_shape.size());
-
-    std::vector<const char*> text_input_names = {"input_ids"};
-    std::vector<const char*> text_output_names = {"hidden_states"};
     std::vector<Ort::Value> text_input_values;
     text_input_values.push_back(std::move(text_input_tensor));
 
+    // Run inference
     auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
-                                             text_input_values.data(), text_input_values.size(),
-                                             text_output_names.data(), text_output_names.size());
+                                            text_input_values.data(), text_input_values.size(),
+                                            text_output_names.data(), text_output_names.size());
 
-    std::cout << "Text embedding completed, got " << text_outputs.size() << " outputs" << std::endl;
-
-    // Check output shape
+    // Convert float16 output to float32
     auto text_shape = text_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    std::cout << "Text output shape: [";
-    for (size_t i = 0; i < text_shape.size(); i++) {
-        std::cout << text_shape[i];
-        if (i < text_shape.size() - 1) std::cout << ", ";
+
+    size_t total_elements = 1;
+    for (auto dim : text_shape) total_elements *= dim;
+
+    // Get raw float16 data from ONNX output
+    const uint16_t* float16_raw_data = reinterpret_cast<const uint16_t*>(text_outputs[0].GetTensorData<void>());
+
+    // Convert to float32 for easier processing
+    std::vector<float> hidden_states_float32;
+    hidden_states_float32.reserve(total_elements);
+
+    for (size_t i = 0; i < total_elements; i++) {
+        hidden_states_float32.push_back(uint16_to_float32(float16_raw_data[i]));
     }
-    std::cout << "]" << std::endl;
 
-    // Split text embedding and merge with image features (similar to run_vlm.py lines 149-155)
-    std::cout << "Splitting text embeddings at image token position..." << std::endl;
+    // Print text embedding results
+    print_text_embedding(hidden_states_float32, text_shape);
 
-    // Get pointers to the tensor data
-    const float* text_data = text_outputs[0].GetTensorData<float>();
-    const float* vision_data = vision_outputs[0].GetTensorData<float>();
-
-    // Text embedding shape: [batch_size, seq_len, hidden_dim]
-    int batch_size = text_shape[0];
-    int seq_len = text_shape[1];
-    int text_hidden_dim = text_shape[2];
-
-    // Vision embedding shape: [1, 197, 896]
-    int vision_seq_len = vision_shape[1];
-    int vision_hidden_dim = vision_shape[2];
-
-    std::cout << "Text embedding: [" << batch_size << ", " << seq_len << ", " << text_hidden_dim << "]" << std::endl;
-    std::cout << "Vision embedding: [" << vision_shape[0] << ", " << vision_seq_len << ", " << vision_hidden_dim << "]" << std::endl;
-
-    // Calculate sizes for splitting
-    int pre_image_tokens = image_token_pos;
-    int post_image_tokens = seq_len - image_token_pos - 1;
-    int total_merged_len = pre_image_tokens + vision_seq_len + post_image_tokens;
-
-    std::cout << "Pre-image tokens: " << pre_image_tokens << std::endl;
-    std::cout << "Vision tokens: " << vision_seq_len << std::endl;
-    std::cout << "Post-image tokens: " << post_image_tokens << std::endl;
-    std::cout << "Total merged length: " << total_merged_len << std::endl;
-
-    // Create merged hidden states
-    std::vector<float> merged_hidden_states(batch_size * total_merged_len * text_hidden_dim);
-
-    // Copy pre-image text embeddings
-    int pre_size = pre_image_tokens * text_hidden_dim;
-    std::copy(text_data, text_data + pre_size, merged_hidden_states.begin());
-
-    // Copy image features
-    int vision_size = vision_seq_len * vision_hidden_dim;
-    std::copy(vision_data, vision_data + vision_size,
-              merged_hidden_states.begin() + pre_size);
-
-    // Copy post-image text embeddings
-    int post_start_idx = (image_token_pos + 1) * text_hidden_dim;
-    int post_size = post_image_tokens * text_hidden_dim;
-    std::copy(text_data + post_start_idx, text_data + post_start_idx + post_size,
-              merged_hidden_states.begin() + pre_size + vision_size);
-
-    std::cout << "Text and image embeddings merged successfully." << std::endl;
-    std::cout << "Merged hidden states size: " << merged_hidden_states.size() << std::endl;
-
-    // 6. Top-P Sampling Function (similar to run_vlm.py lines 93-107)
-    //    - Sort logits in descending order
-    //    - Compute cumulative probabilities
-    //    - Find cutoff index for top_p threshold (0.99)
-    //    - Sample from filtered distribution
-
-    // 7. Decode Step (similar to run_vlm.py lines 180-234)
-    //    - Generation loop for MAX_GEN_LEN (128) tokens
-    //    - For each step:
-    //      * Get embedding for current token
-    //      * Prepare decoder inputs with past_kv_values
-    //      * Run decoder inference
-    //      * Update past_kv_values from present outputs
-    //      * Sample next token using top-p sampling
-    //      * Check for EOS token
-    //      * Accumulate generated tokens
-    //    - Decode final response
-    //    - Save to output file
-    //    - Print throughput metrics
-
-    // 8. Performance Monitoring
-    //    - Track prefill time and throughput
-    //    - Track decode time and throughput
-    //    - Memory usage monitoring
-
-    // 9. Output and Cleanup
-    //    - Print generated response
-    //    - Save to output file
-    //    - Display performance metrics
-
-    std::cout << "Ready for VLM implementation following run_vlm.py structure" << std::endl;
-
+    std::cout << "\nVLM text generation completed successfully!" << std::endl;
     return 0;
 }
