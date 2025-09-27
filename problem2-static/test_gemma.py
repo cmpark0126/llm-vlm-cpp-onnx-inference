@@ -655,7 +655,7 @@ if __name__ == "__main__":
     onnx_decode_path = "./gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx"
     onnx_decode_session = load_onnx_model(onnx_decode_path)
 
-    # 기존 방식 실행
+    # # 기존 방식 실행
     # execute_original_model(tokenizer, model, inputs)
     # print()
 
@@ -667,9 +667,9 @@ if __name__ == "__main__":
 
     print("-" * 100)
 
-    # PyTorch Static 분리된 방식 실행
-    execute_pytorch_static_split_model(tokenizer, model, inputs)
-    print()
+    # # PyTorch Static 분리된 방식 실행
+    # execute_pytorch_static_split_model(tokenizer, model, inputs)
+    # print()
 
     print("-" * 100)
 
