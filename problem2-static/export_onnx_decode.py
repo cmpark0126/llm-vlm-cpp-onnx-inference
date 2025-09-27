@@ -2,53 +2,58 @@ import os
 
 import torch
 import torch.nn as nn
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 from transformers import AutoModelForCausalLM
+
+
+@torch.jit.script
+def update_cache(existing_key_cache: torch.Tensor, existing_value_cache: torch.Tensor,
+                 new_key_states: torch.Tensor, new_value_states: torch.Tensor,
+                 current_length: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    새로운 key/value를 기존 cache의 다음 위치에 추가
+    """
+    updated_key_cache = existing_key_cache.clone()
+    updated_value_cache = existing_value_cache.clone()
+
+    # current_length 위치에 새로운 key/value 추가 - scatter 사용
+    batch_size, num_heads, _, head_dim = updated_key_cache.shape
+
+    # 인덱스 텐서 생성: current_length를 모든 차원에 확장
+    pos_indices = current_length.view(1, 1, 1, 1).expand(batch_size, num_heads, 1, head_dim)
+
+    # scatter를 사용하여 업데이트
+    updated_key_cache.scatter_(2, pos_indices, new_key_states)
+    updated_value_cache.scatter_(2, pos_indices, new_value_states)
+
+    return updated_key_cache, updated_value_cache
 
 
 class TempCache:
     def __init__(
-        self, existing_key_cache=None, existing_value_cache=None, current_length=0
+        self, existing_key_cache=None, existing_value_cache=None, current_length=None
     ):
         """
         Args:
             existing_key_cache: [batch_size, num_heads, max_cache_length, head_dim]
             existing_value_cache: [batch_size, num_heads, max_cache_length, head_dim]
-            current_length: 현재 유효한 sequence length
+            current_length: 현재 유효한 sequence length (tensor)
         """
         self.key_states = existing_key_cache
         self.value_states = existing_value_cache
         self.current_length = current_length
 
-    def update(self, key_states, value_states, layer_idx, cache_kwargs):
+    def update(self, key_states: torch.Tensor, value_states: torch.Tensor, layer_idx: Any, cache_kwargs: Any):
         """
         새로운 key/value를 기존 cache의 다음 위치에 추가
         key_states, value_states: [batch_size, num_heads, 1, head_dim] - 새로운 토큰
         """
-        # 기존 cache의 current_length 위치에 새로운 key/value 추가
-        batch_size, num_heads, _, head_dim = key_states.shape
-
-        # print(f"key_states: {key_states.sum()}")
-        # print(f"value_states: {value_states.sum()}")
-
-        new_key_states = self.key_states.clone()
-        new_value_states = self.value_states.clone()
-
-        # current_length 위치에 새로운 key/value 추가
-        new_key_states[:, :, self.current_length, :] = (
-            key_states
-        )
-        new_value_states[:, :, self.current_length, :] = (
-            value_states
+        # TorchScript 함수 사용
+        self.key_states, self.value_states = update_cache(
+            self.key_states, self.value_states, key_states, value_states, self.current_length
         )
 
-        self.input_key_states = key_states
-        self.input_value_states = value_states
-
-        # print(f"self.key_states: {self.key_states[:, :, self.current_length, :].sum()}")
-        # print(f"self.value_states: {self.value_states[:, :, self.current_length, :].sum()}")
-
-        return new_key_states, new_value_states
+        return self.key_states, self.value_states
 
 class StaticGemmaDecode(nn.Module):
     """
@@ -127,6 +132,7 @@ class StaticGemmaDecode(nn.Module):
         input_ids: torch.LongTensor,  # [batch_size, 1]
         position_ids: torch.LongTensor,  # [batch_size, 1]
         attention_mask: torch.Tensor,  # [batch_size, 1024]
+        cache_position: torch.Tensor,  # Target position in cache for new key/value [1]
         *past_key_values,  # Previous KV cache for each layer [batch_size, num_heads, 1024, head_dim]
     ) -> Tuple[torch.Tensor, ...]:
         """
@@ -136,6 +142,7 @@ class StaticGemmaDecode(nn.Module):
             input_ids: [batch_size, 1] - Single token input
             position_ids: [batch_size, 1] - Current position in sequence
             attention_mask: [batch_size, 1024] - Attention mask (1 for valid positions, 0 for padding)
+            cache_position: torch.Tensor - Target position in cache for new key/value (0-based) [1]
             *past_key_values: Previous KV cache for each layer,
                              each pair: (key, value) with shape [batch_size, num_heads, 1024, head_dim]
 
@@ -148,7 +155,6 @@ class StaticGemmaDecode(nn.Module):
         """
 
         batch_size = input_ids.shape[0]
-        current_position = position_ids[0, 0].item()  # Extract current position
 
         # 1. Input validation - ensure single token input
         assert (
@@ -187,7 +193,7 @@ class StaticGemmaDecode(nn.Module):
             kv_cache = TempCache(
                 existing_key_cache=past_key,
                 existing_value_cache=past_value,
-                current_length=current_position - 1
+                current_length=cache_position
             )
 
             # Use the provided attention mask
@@ -209,13 +215,13 @@ class StaticGemmaDecode(nn.Module):
                 past_key_values=kv_cache,
                 output_attentions=False,
                 use_cache=True,
-                cache_position=torch.tensor([current_position], device=hidden_states.device),
+                cache_position=cache_position,
             )
 
             hidden_states = outputs[0]
 
             # Extract updated KV cache (should be same as past cache with new token added)
-            all_kv_caches.append((kv_cache.input_key_states, kv_cache.input_value_states))
+            all_kv_caches.append((kv_cache.key_states, kv_cache.value_states))
 
         # 6. Final layer norm
         hidden_states = self.norm(hidden_states)
@@ -260,6 +266,7 @@ def export_static_gemma_decode_to_onnx(
         0, config.vocab_size, (batch_size, 1), dtype=torch.long
     )
     dummy_position_ids = torch.tensor([[0]], dtype=torch.long)  # Start at position 0
+    dummy_cache_position = torch.tensor([0], dtype=torch.long)  # Target cache position
     dummy_attention_mask = torch.ones((batch_size, 1024), dtype=torch.long)  # All positions valid for testing
 
     # Create dummy past KV caches (initialized with zeros)
@@ -270,7 +277,7 @@ def export_static_gemma_decode_to_onnx(
         dummy_past_kv.extend([dummy_key, dummy_value])
 
     # Create input names for KV caches
-    input_names = ["input_ids", "position_ids", "attention_mask"]
+    input_names = ["input_ids", "position_ids", "attention_mask", "cache_position"]
     for layer_idx in range(num_layers):
         input_names.extend([f"past.{layer_idx}.key", f"past.{layer_idx}.value"])
 
@@ -284,6 +291,7 @@ def export_static_gemma_decode_to_onnx(
     print(f"  - input_ids: [1, 1]")
     print(f"  - position_ids: [1, 1]")
     print(f"  - attention_mask: [1, 1024]")
+    print(f"  - cache_position: [1]")
     for layer_idx in range(num_layers):
         print(f"  - past.{layer_idx}.key, past.{layer_idx}.value: [1, {num_key_value_heads}, 1024, {head_dim}]")
 
@@ -293,7 +301,7 @@ def export_static_gemma_decode_to_onnx(
         print(f"  - present.{layer_idx}.key, present.{layer_idx}.value: [1, {num_key_value_heads}, 1024, {head_dim}]")
 
     # Prepare arguments for export
-    export_args = (dummy_input_ids, dummy_position_ids, dummy_attention_mask) + tuple(dummy_past_kv)
+    export_args = (dummy_input_ids, dummy_position_ids, dummy_attention_mask, dummy_cache_position) + tuple(dummy_past_kv)
 
     # Export to ONNX
     torch.onnx.export(

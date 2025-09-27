@@ -315,6 +315,7 @@ def run_onnx_decode_loop(
     static_past_kv = []
     for i in range(max_new_tokens - 1):
         current_pos = next_position.item()
+        cache_position = current_pos - 1
 
         # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
         attention_mask = torch.zeros(1, 1024, dtype=torch.long)
@@ -325,6 +326,7 @@ def run_onnx_decode_loop(
             "input_ids": next_token.cpu().numpy().astype(np.int64),
             "position_ids": next_position.cpu().numpy().astype(np.int64),
             "attention_mask": attention_mask.cpu().numpy().astype(np.int64),
+            "cache_position": torch.tensor([cache_position]).numpy(),
         }
 
         # 과거 KV cache를 ONNX 입력에 추가
@@ -372,7 +374,7 @@ def run_onnx_decode_loop(
         # KV cache 업데이트 - PyTorch static decode와 동일한 방식
         # ONNX 출력의 present KV cache를 static_past_kv에 업데이트
         for past_kv, present_kv in zip(static_past_kv, onnx_outputs[1:]):
-            past_kv[0, 0, current_pos - 1, :] = present_kv
+            past_kv[0, 0, cache_position, :] = present_kv[0, 0, cache_position, :]
 
         past_key_values = None  # DynamicCache는 첫 번째 iteration 이후 사용 안함
 
@@ -557,6 +559,7 @@ def run_pytorch_static_decode_loop(
     static_past_kv = []
     for i in range(max_new_tokens - 1):
         current_pos = next_position.item()
+        cache_position = current_pos - 1
 
         # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
         attention_mask = torch.zeros(1, 1024, dtype=torch.long)
@@ -587,6 +590,7 @@ def run_pytorch_static_decode_loop(
                 next_token,
                 next_position,
                 attention_mask,
+                torch.tensor([cache_position]),
                 *static_past_kv
             )
 
@@ -606,7 +610,7 @@ def run_pytorch_static_decode_loop(
         # KV cache 업데이트 - Static 출력을 바로 사용
         # Static 출력의 present KV cache를 다음 iteration의 past로 사용
         for past_kv, present_kv in zip(static_past_kv, outputs[1:]):
-            past_kv[0, 0, current_pos - 1, :] = present_kv
+            past_kv[0, 0, cache_position, :] = present_kv[0, 0, cache_position, :]
         past_key_values = None
 
         # 스트리밍 출력
