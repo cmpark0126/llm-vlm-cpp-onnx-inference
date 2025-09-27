@@ -3,10 +3,6 @@ set -e
 
 echo "Problem 2: Static Graph Export & Text Generation"
 
-# Export ONNX graphs
-echo "Exporting ONNX graphs..."
-python3 export_onnx.py
-
 # Build C++ application
 echo "Building C++ application..."
 mkdir -p build
