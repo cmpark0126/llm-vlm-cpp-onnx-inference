@@ -312,8 +312,11 @@ if __name__ == "__main__":
     static_model = StaticGemmaPrefill(model, model.config)
 
     print("Exporting to ONNX...")
-    if not os.path.exists("gemma-3-1b-it-prefill"):
-        os.makedirs("gemma-3-1b-it-prefill")
+    if os.path.exists("gemma-3-1b-it-prefill"):
+        print("gemma-3-1b-it-prefill already exists")
+        exit(0)
+
+    os.makedirs("gemma-3-1b-it-prefill")
 
     print("Exporting to ONNX...")
     export_static_gemma_prefill_to_onnx(

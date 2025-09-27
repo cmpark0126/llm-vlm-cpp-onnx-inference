@@ -337,8 +337,11 @@ if __name__ == "__main__":
     static_model = StaticGemmaDecode(model, model.config)
 
     print("Exporting to ONNX...")
-    if not os.path.exists("gemma-3-1b-it-decode"):
-        os.makedirs("gemma-3-1b-it-decode")
+    if os.path.exists("gemma-3-1b-it-decode"):
+        print("gemma-3-1b-it-decode already exists")
+        exit(0)
+
+    os.makedirs("gemma-3-1b-it-decode")
 
     print("Exporting to ONNX...")
     export_static_gemma_decode_to_onnx(
