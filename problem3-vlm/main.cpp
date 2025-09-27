@@ -55,6 +55,7 @@ class SimpleTokenizer;
 // Constants
 const int64_t IMAGE_TOKEN_INDEX = 151646;
 const int MAX_GEN_LEN = 128;
+const bool USE_SAMPLING = true;  // true for top-p sampling, false for argmax
 
 // Text embedding function
 std::vector<float> run_text_embedding(Ort::Session& text_emb_session, const std::vector<int64_t>& input_ids, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator) {
@@ -657,17 +658,21 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
     int last_token_offset = (logits_shape[1] - 1) * vocab_size;
     const float* last_token_logits = logits_data + last_token_offset;
 
-    // Find argmax (next token)
-    int next_token = 0;
-    float max_logit = last_token_logits[0];
-    for (int i = 1; i < vocab_size; i++) {
-        if (last_token_logits[i] > max_logit) {
-            max_logit = last_token_logits[i];
-            next_token = i;
+    // Get next token using sampling or argmax
+    int next_token;
+    if (USE_SAMPLING) {
+        next_token = top_p_sampling(last_token_logits, vocab_size);
+    } else {
+        // Find argmax (next token)
+        next_token = 0;
+        float max_logit = last_token_logits[0];
+        for (int i = 1; i < vocab_size; i++) {
+            if (last_token_logits[i] > max_logit) {
+                max_logit = last_token_logits[i];
+                next_token = i;
+            }
         }
     }
-
-    std::cout << "Next token: " << next_token << " (logit: " << max_logit << ")" << std::endl;
     std::cout << "Decoded token: \"" << tokenizer.decode({next_token}) << "\"" << std::endl;
 
     std::cout << "Prefill step completed. Throughput: " << std::fixed << std::setprecision(2)
@@ -781,13 +786,18 @@ void run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session, 
         int vocab_size = logits_shape[2];
         const float* last_token_logits = logits_data;
 
-        // Find argmax
-        next_token = 0;
-        float max_logit = last_token_logits[0];
-        for (int i = 1; i < vocab_size; i++) {
-            if (last_token_logits[i] > max_logit) {
-                max_logit = last_token_logits[i];
-                next_token = i;
+        // Get next token using sampling or argmax
+        if (USE_SAMPLING) {
+            next_token = top_p_sampling(last_token_logits, vocab_size);
+        } else {
+            // Find argmax
+            next_token = 0;
+            float max_logit = last_token_logits[0];
+            for (int i = 1; i < vocab_size; i++) {
+                if (last_token_logits[i] > max_logit) {
+                    max_logit = last_token_logits[i];
+                    next_token = i;
+                }
             }
         }
 
