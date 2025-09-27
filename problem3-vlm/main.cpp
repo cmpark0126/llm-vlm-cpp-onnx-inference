@@ -484,6 +484,56 @@ int main() {
     }
     std::cout << "]" << std::endl;
 
+    // Split text embedding and merge with image features (similar to run_vlm.py lines 149-155)
+    std::cout << "Splitting text embeddings at image token position..." << std::endl;
+
+    // Get pointers to the tensor data
+    const float* text_data = text_outputs[0].GetTensorData<float>();
+    const float* vision_data = vision_outputs[0].GetTensorData<float>();
+
+    // Text embedding shape: [batch_size, seq_len, hidden_dim]
+    int batch_size = text_shape[0];
+    int seq_len = text_shape[1];
+    int text_hidden_dim = text_shape[2];
+
+    // Vision embedding shape: [1, 197, 896]
+    int vision_seq_len = vision_shape[1];
+    int vision_hidden_dim = vision_shape[2];
+
+    std::cout << "Text embedding: [" << batch_size << ", " << seq_len << ", " << text_hidden_dim << "]" << std::endl;
+    std::cout << "Vision embedding: [" << vision_shape[0] << ", " << vision_seq_len << ", " << vision_hidden_dim << "]" << std::endl;
+
+    // Calculate sizes for splitting
+    int pre_image_tokens = image_token_pos;
+    int post_image_tokens = seq_len - image_token_pos - 1;
+    int total_merged_len = pre_image_tokens + vision_seq_len + post_image_tokens;
+
+    std::cout << "Pre-image tokens: " << pre_image_tokens << std::endl;
+    std::cout << "Vision tokens: " << vision_seq_len << std::endl;
+    std::cout << "Post-image tokens: " << post_image_tokens << std::endl;
+    std::cout << "Total merged length: " << total_merged_len << std::endl;
+
+    // Create merged hidden states
+    std::vector<float> merged_hidden_states(batch_size * total_merged_len * text_hidden_dim);
+
+    // Copy pre-image text embeddings
+    int pre_size = pre_image_tokens * text_hidden_dim;
+    std::copy(text_data, text_data + pre_size, merged_hidden_states.begin());
+
+    // Copy image features
+    int vision_size = vision_seq_len * vision_hidden_dim;
+    std::copy(vision_data, vision_data + vision_size,
+              merged_hidden_states.begin() + pre_size);
+
+    // Copy post-image text embeddings
+    int post_start_idx = (image_token_pos + 1) * text_hidden_dim;
+    int post_size = post_image_tokens * text_hidden_dim;
+    std::copy(text_data + post_start_idx, text_data + post_start_idx + post_size,
+              merged_hidden_states.begin() + pre_size + vision_size);
+
+    std::cout << "Text and image embeddings merged successfully." << std::endl;
+    std::cout << "Merged hidden states size: " << merged_hidden_states.size() << std::endl;
+
     // 6. Top-P Sampling Function (similar to run_vlm.py lines 93-107)
     //    - Sort logits in descending order
     //    - Compute cumulative probabilities
