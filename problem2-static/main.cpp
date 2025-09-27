@@ -516,8 +516,15 @@ int main() {
         memory_info, decode_attention_mask.data(), decode_attention_mask.size(),
         decode_attention_shape.data(), decode_attention_shape.size());
 
+    // Create cache_position for decode
+    std::vector<int64_t> cache_position = {current_position - 1};  // 0-indexed cache position
+    std::vector<int64_t> cache_position_shape = {1};  // rank 1 tensor
+    auto cache_position_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, cache_position.data(), cache_position.size(),
+        cache_position_shape.data(), cache_position_shape.size());
+
     // Prepare decode input names and values
-    std::vector<const char*> decode_input_names = {"input_ids", "position_ids", "attention_mask"};
+    std::vector<const char*> decode_input_names = {"input_ids", "position_ids", "attention_mask", "cache_position"};
     std::vector<std::string> kv_input_names_storage;
 
     // Add past KV cache input names
@@ -542,6 +549,7 @@ int main() {
     decode_input_values.push_back(std::move(decode_input_tensor));
     decode_input_values.push_back(std::move(decode_position_tensor));
     decode_input_values.push_back(std::move(decode_attention_tensor));
+    decode_input_values.push_back(std::move(cache_position_tensor));
     for (auto& kv_tensor : past_kv_tensors) {
         decode_input_values.push_back(std::move(kv_tensor));
     }
@@ -614,23 +622,22 @@ int main() {
             break;
         }
 
-        // Update KV cache: assign present KV cache to current position in past KV cache
+        // Update KV cache: assign present KV cache to cache_position in past KV cache
+        int cache_pos = current_position - 1;  // cache_position for this iteration
         for (size_t kv_idx = 0; kv_idx < kv_cache_storage.size(); kv_idx++) {
             const float* present_data = decode_outputs[1 + kv_idx].GetTensorData<float>();
             auto present_shape = decode_outputs[1 + kv_idx].GetTensorTypeAndShapeInfo().GetShape();
 
             // present shape: [1, num_heads, 1, head_dim]
-            // Update position (current_position - 1) in kv_cache_storage
-            int update_pos = current_position - 1;
+            // Update cache_position in kv_cache_storage
             auto& cache_data = kv_cache_storage[kv_idx];
 
             // Calculate indices: cache is [1, num_heads, 1024, head_dim]
+            // present is [1, num_heads, 1, head_dim]
             for (int64_t h = 0; h < present_shape[1]; h++) {
                 for (int64_t d = 0; d < present_shape[3]; d++) {
-                    size_t cache_idx =
-                        h * MAX_SEQ_LEN * present_shape[3] + update_pos * present_shape[3] + d;
-                    size_t present_idx = h * present_shape[3] + d;
-                    cache_data[cache_idx] = present_data[present_idx];
+                    size_t idx = h * MAX_SEQ_LEN * present_shape[3] + cache_pos * present_shape[3] + d;
+                    cache_data[idx] = present_data[idx];
                 }
             }
         }
@@ -642,6 +649,7 @@ int main() {
         // Update input tensors
         decode_input_ids[0] = current_token;
         decode_position_ids[0] = current_position;
+        cache_position[0] = current_position - 1;  // Update cache_position
 
         // Update attention mask
         if (current_position <= MAX_SEQ_LEN) {
@@ -663,9 +671,14 @@ int main() {
             memory_info, decode_attention_mask.data(), decode_attention_mask.size(),
             decode_attention_shape.data(), decode_attention_shape.size());
 
+        auto new_cache_position_tensor = Ort::Value::CreateTensor<int64_t>(
+            memory_info, cache_position.data(), cache_position.size(),
+            cache_position_shape.data(), cache_position_shape.size());
+
         decode_input_values.push_back(std::move(new_decode_input_tensor));
         decode_input_values.push_back(std::move(new_decode_position_tensor));
         decode_input_values.push_back(std::move(new_decode_attention_tensor));
+        decode_input_values.push_back(std::move(new_cache_position_tensor));
 
         // Recreate KV cache tensors with updated data
         for (size_t kv_idx = 0; kv_idx < kv_cache_storage.size(); kv_idx++) {
