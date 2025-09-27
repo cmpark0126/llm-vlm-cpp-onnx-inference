@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -19,9 +20,32 @@ int main() {
     // ===================================================
 
     // 1. Load ONNX Sessions (similar to run_vlm.py lines 13-22)
-    //    - Load vision encoder: "vlm/model/vision_encoder.onnx"
-    //    - Load token embedding: "vlm/model/token_embedding.onnx"
-    //    - Load decoder: "vlm/model/decoder.onnx"
+    std::cout << "Loading inference sessions..." << std::endl;
+    auto load_start = std::chrono::high_resolution_clock::now();
+
+    // Initialize ONNX Runtime
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "VLMInference");
+    Ort::SessionOptions session_options;
+
+    // Load the three ONNX models
+    std::string vision_encoder_path = "../../llm_vlm_onnx_sample/vlm/model/vision_encoder.onnx";
+    std::string token_embedding_path = "../../llm_vlm_onnx_sample/vlm/model/token_embedding.onnx";
+    std::string decoder_path = "../../llm_vlm_onnx_sample/vlm/model/decoder.onnx";
+
+    Ort::Session image_emb_session(env, vision_encoder_path.c_str(), session_options);
+    Ort::Session text_emb_session(env, token_embedding_path.c_str(), session_options);
+    Ort::Session decoding_session(env, decoder_path.c_str(), session_options);
+
+    auto load_end = std::chrono::high_resolution_clock::now();
+    auto load_duration = std::chrono::duration<double>(load_end - load_start).count();
+
+    std::cout << "Inference sessions are loaded. Loading takes " << std::fixed << std::setprecision(2)
+              << load_duration << " sec" << std::endl;
+
+    std::cout << "Successfully loaded:" << std::endl;
+    std::cout << "  - Vision encoder: " << vision_encoder_path << std::endl;
+    std::cout << "  - Token embedding: " << token_embedding_path << std::endl;
+    std::cout << "  - Decoder: " << decoder_path << std::endl;
 
     // 2. Initialize Tokenizer (similar to run_vlm.py lines 26-27)
     //    - Load tokenizer from "./vlm/tokenizer"
