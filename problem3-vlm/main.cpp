@@ -101,6 +101,47 @@ std::vector<float> run_text_embedding(Ort::Session& text_emb_session, const std:
     return hidden_states_float32;
 }
 
+// Image embedding function
+std::vector<float> run_image_embedding(Ort::Session& image_emb_session, const std::vector<float>& image_tensor_data, Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator) {
+    // Create image input tensor [1, 3, 224, 224]
+    std::vector<int64_t> image_shape = {1, 3, 224, 224};
+    auto image_input_tensor = Ort::Value::CreateTensor<float>(memory_info, const_cast<float*>(image_tensor_data.data()),
+                                                            image_tensor_data.size(), image_shape.data(),
+                                                            image_shape.size());
+
+    // Get input/output names
+    auto input_name_allocated = image_emb_session.GetInputNameAllocated(0, allocator);
+    auto output_name_allocated = image_emb_session.GetOutputNameAllocated(0, allocator);
+
+    std::vector<const char*> image_input_names = {input_name_allocated.get()};
+    std::vector<const char*> image_output_names = {output_name_allocated.get()};
+
+    std::vector<Ort::Value> image_input_values;
+    image_input_values.push_back(std::move(image_input_tensor));
+
+    // Run inference
+    auto image_outputs = image_emb_session.Run(Ort::RunOptions{nullptr}, image_input_names.data(),
+                                             image_input_values.data(), image_input_values.size(),
+                                             image_output_names.data(), image_output_names.size());
+
+    // Get output shape [1, 197, 896]
+    auto image_shape_out = image_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+
+    size_t total_elements = 1;
+    for (auto dim : image_shape_out) total_elements *= dim;
+
+    // Get raw float32 data from ONNX output
+    const float* image_data = image_outputs[0].GetTensorData<float>();
+
+    // Convert to vector
+    std::vector<float> image_features_proj(image_data, image_data + total_elements);
+
+    std::cout << "Image embedding shape: [" << image_shape_out[0] << ", " << image_shape_out[1] << ", " << image_shape_out[2] << "]" << std::endl;
+    std::cout << "Image embedding extracted successfully" << std::endl;
+
+    return image_features_proj;
+}
+
 
 // Helper function to print text embedding
 void print_text_embedding(const std::vector<float>& hidden_states, const std::vector<int64_t>& shape) {
@@ -871,7 +912,7 @@ int main() {
     auto prefill_start = std::chrono::high_resolution_clock::now();
 
     // Create prompt with image token (similar to run_vlm.py line 30)
-    std::string prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n";
+    std::string prompt = "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n";
     std::cout << "Prompt created: \"" << escape_special_chars(prompt) << "\"" << std::endl;
 
     // Tokenize input prompt (similar to run_vlm.py line 121)
@@ -887,17 +928,72 @@ int main() {
     }
     std::cout << std::endl;
 
+    // Find image token position (similar to run_vlm.py line 122)
+    int image_token_pos = -1;
+    for (size_t i = 0; i < input_ids.size(); i++) {
+        if (input_ids[i] == IMAGE_TOKEN_INDEX) {
+            image_token_pos = i;
+            break;
+        }
+    }
+
+    if (image_token_pos == -1) {
+        std::cerr << "Error: <image> token not found in input_ids" << std::endl;
+        return 1;
+    }
+
+    std::cout << "Image token found at position: " << image_token_pos << std::endl;
+
     // Create memory info for tensor creation
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     Ort::AllocatorWithDefaultOptions allocator;
 
-    // Get text embedding (similar to run_vlm.py line 147)
-    auto hidden_states_float32 = run_text_embedding(text_emb_session, input_ids, memory_info, allocator);
+    // Get image embedding (similar to run_vlm.py lines 127-128)
+    auto image_features_proj = run_image_embedding(image_emb_session, image_tensor_data, memory_info, allocator);
 
-    int input_token_len = input_ids.size();
+    // Get text embedding (similar to run_vlm.py lines 131-132)
+    auto text_embeddings = run_text_embedding(text_emb_session, input_ids, memory_info, allocator);
 
-    // Print text embedding results
-    std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_ids.size()), 896};
+    // Split text embedding around image token (similar to run_vlm.py lines 135-136)
+    std::vector<float> pre_image_text_emb;
+    std::vector<float> post_image_text_emb;
+
+    int embed_dim = 896;
+
+    // Pre-image text embedding: [:image_token_pos, :]
+    for (int i = 0; i < image_token_pos; i++) {
+        for (int j = 0; j < embed_dim; j++) {
+            pre_image_text_emb.push_back(text_embeddings[i * embed_dim + j]);
+        }
+    }
+
+    // Post-image text embedding: [image_token_pos + 1:, :]
+    for (int i = image_token_pos + 1; i < input_ids.size(); i++) {
+        for (int j = 0; j < embed_dim; j++) {
+            post_image_text_emb.push_back(text_embeddings[i * embed_dim + j]);
+        }
+    }
+
+    // Merge text embedding and image embedding (similar to run_vlm.py line 139)
+    std::vector<float> hidden_states_float32;
+    hidden_states_float32.reserve(pre_image_text_emb.size() + image_features_proj.size() + post_image_text_emb.size());
+
+    // Concatenate: pre_image + image_features + post_image
+    hidden_states_float32.insert(hidden_states_float32.end(), pre_image_text_emb.begin(), pre_image_text_emb.end());
+    hidden_states_float32.insert(hidden_states_float32.end(), image_features_proj.begin(), image_features_proj.end());
+    hidden_states_float32.insert(hidden_states_float32.end(), post_image_text_emb.begin(), post_image_text_emb.end());
+
+    // Calculate new token length (similar to run_vlm.py line 140)
+    int input_token_len = image_token_pos + 197 + (input_ids.size() - image_token_pos - 1);
+
+    std::cout << "Merged embedding info:" << std::endl;
+    std::cout << "  - Pre-image tokens: " << image_token_pos << std::endl;
+    std::cout << "  - Image features: 197" << std::endl;
+    std::cout << "  - Post-image tokens: " << (input_ids.size() - image_token_pos - 1) << std::endl;
+    std::cout << "  - Total token length: " << input_token_len << std::endl;
+
+    // Print merged embedding results
+    std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), 896};
     print_text_embedding(hidden_states_float32, text_shape);
 
     // 5. Prefill Step (similar to run_vlm.py lines 187-206)
