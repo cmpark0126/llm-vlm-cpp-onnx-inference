@@ -1,5 +1,8 @@
 #include <onnxruntime_cxx_api.h>
+#include <sys/resource.h>
+#include <unistd.h>
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
@@ -194,6 +197,19 @@ std::string escape_special_chars(const std::string& text) {
         pos += 2;
     }
     return escaped_text;
+}
+
+static int64_t get_time_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::high_resolution_clock::now().time_since_epoch())
+        .count();
+}
+
+size_t get_peak_memory_usage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    // ru_maxrss is in kilobytes on Linux
+    return usage.ru_maxrss * 1024;  // convert KB to bytes
 }
 
 int main() {
@@ -580,6 +596,12 @@ int main() {
     std::cout << "Starting decode loop (max " << DEFAULT_MAX_NEW_TOKENS << " tokens)..."
               << std::endl;
 
+    // Performance measurement variables
+    int64_t first_token_time_ms = 0;
+    std::vector<double> token_times_ms;
+    bool first_token_generated = false;
+    std::vector<int64_t> generated_tokens;
+
     // Stream first token
     std::string first_token_text = tokenizer.decode(current_token);
     if (first_token_text.find("<") == std::string::npos &&
@@ -587,7 +609,12 @@ int main() {
         std::cout << first_token_text << std::flush;
     }
 
+    // Start timing here for generation loop
+    int64_t generation_start_ms = get_time_ms();
+
     for (int i = 0; i < DEFAULT_MAX_NEW_TOKENS - 1; i++) {
+        int64_t token_start_ms = get_time_ms();
+
         // Run decode inference
         auto decode_outputs = decode_session.Run(
             Ort::RunOptions{nullptr}, decode_input_names.data(), decode_input_values.data(),
@@ -621,6 +648,20 @@ int main() {
         if (is_eos) {
             std::cout << std::endl;
             break;
+        }
+
+        // Add to generated tokens
+        generated_tokens.push_back(decode_next_token);
+
+        // Measure token generation time
+        int64_t token_end_ms = get_time_ms();
+        double token_duration_ms = token_end_ms - token_start_ms;
+        token_times_ms.push_back(token_duration_ms);
+
+        // Record first token time (TTFT)
+        if (!first_token_generated) {
+            first_token_time_ms = token_end_ms;
+            first_token_generated = true;
         }
 
         // Update KV cache: assign present KV cache to cache_position in past KV cache
@@ -711,6 +752,37 @@ int main() {
 
     std::cout << std::endl;
     std::cout << "Decode loop completed" << std::endl;
+
+    // Performance measurements
+    int64_t generation_end_ms = get_time_ms();
+    double total_generation_time_ms = generation_end_ms - generation_start_ms;
+
+    // Final batch decode (like Python's tokenizer.batch_decode)
+    std::string final_decoded_text = tokenizer.decode(generated_tokens);
+    std::string escaped_text = escape_special_chars(final_decoded_text);
+    std::cout << "[\"" << escaped_text << "\"]" << std::endl;
+
+    // Calculate TTFT (Time-to-First-Token)
+    double ttft_ms = first_token_time_ms - generation_start_ms;
+
+    // Calculate TPOT (Time-Per-Output-Token) - average of all tokens except first
+    double total_subsequent_time = 0.0;
+    for (size_t i = 1; i < token_times_ms.size(); i++) {
+        total_subsequent_time += token_times_ms[i];
+    }
+    double tpot_ms =
+        token_times_ms.size() > 1 ? total_subsequent_time / (token_times_ms.size() - 1) : 0.0;
+
+    // Get peak memory usage
+    size_t peak_memory = get_peak_memory_usage();
+
+    // Print performance metrics
+    std::cout << "\n=== Performance Metrics ===" << std::endl;
+    std::cout << "Time-to-First-Token (TTFT): " << ttft_ms << " ms" << std::endl;
+    std::cout << "Time-Per-Output-Token (TPOT): " << tpot_ms << " ms" << std::endl;
+    std::cout << "Peak Memory Usage: " << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "Total Generation Time: " << total_generation_time_ms << " ms" << std::endl;
+    std::cout << "Total Tokens Generated: " << generated_tokens.size() << std::endl;
 
     return 0;
 }
