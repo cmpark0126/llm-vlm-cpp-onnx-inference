@@ -7,6 +7,7 @@
 #include <iomanip>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <opencv2/opencv.hpp>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -17,6 +18,109 @@ using json = nlohmann::json;
 const int64_t IMAGE_TOKEN_INDEX = 151646;
 const int MAX_GEN_LEN = 128;
 const bool USE_SAMPLING = true;
+
+// Image processing function (similar to run_vlm.py lines 36-90)
+std::vector<float> process_image(const std::string& image_path) {
+    // Parameters from Python code
+    const int crop_size = 224;
+    const bool do_center_crop = true;
+    const bool do_convert_rgb = true;
+    const bool do_normalize = true;
+    const bool do_rescale = true;
+    const bool do_resize = true;
+    const std::vector<float> image_mean = {0.48145466f, 0.4578275f, 0.40821073f};
+    const std::vector<float> image_std = {0.26862954f, 0.26130258f, 0.27577711f};
+    const float rescale_factor = 0.00392156862745098f;
+    const int shortest_edge = 224;
+
+    // Load image using OpenCV
+    cv::Mat image = cv::imread(image_path);
+    if (image.empty()) {
+        std::cerr << "Error: Could not load image from: " << image_path << std::endl;
+        exit(1);
+    }
+
+    // Convert BGR to RGB (OpenCV loads as BGR by default)
+    if (do_convert_rgb) {
+        cv::cvtColor(image, image, cv::COLOR_BGR2RGB);
+    }
+
+    // Resize image (maintain aspect ratio, scale shortest edge to 224)
+    if (do_resize) {
+        std::cout << "Original size: " << image.cols << "x" << image.rows << std::endl;
+
+        int current_shortest = std::min(image.cols, image.rows);
+        float scale_factor = static_cast<float>(shortest_edge) / current_shortest;
+        int new_width = static_cast<int>(image.cols * scale_factor + 0.5f);  // Round to nearest
+        int new_height = static_cast<int>(image.rows * scale_factor + 0.5f); // Round to nearest
+
+        // Ensure at least one dimension is >= 224
+        if (new_width < shortest_edge && new_height < shortest_edge) {
+            scale_factor = static_cast<float>(shortest_edge) / current_shortest + 0.001f; // Add small epsilon
+            new_width = static_cast<int>(image.cols * scale_factor + 0.5f);
+            new_height = static_cast<int>(image.rows * scale_factor + 0.5f);
+        }
+
+        std::cout << "Scale factor: " << scale_factor << ", New size: " << new_width << "x" << new_height << std::endl;
+        cv::resize(image, image, cv::Size(new_width, new_height), 0, 0, cv::INTER_CUBIC);
+    }
+
+    // Center crop to 224x224
+    if (do_center_crop) {
+        std::cout << "Before crop: " << image.cols << "x" << image.rows << std::endl;
+
+        // Ensure image is at least crop_size in both dimensions
+        if (image.cols < crop_size || image.rows < crop_size) {
+            std::cerr << "Error: Image too small for cropping. Size: " << image.cols << "x" << image.rows
+                      << ", required: " << crop_size << "x" << crop_size << std::endl;
+            exit(1);
+        }
+
+        int left = (image.cols - crop_size) / 2;
+        int top = (image.rows - crop_size) / 2;
+        cv::Rect crop_rect(left, top, crop_size, crop_size);
+
+        std::cout << "Crop rect: " << left << "," << top << " " << crop_size << "x" << crop_size << std::endl;
+
+        image = image(crop_rect);
+        std::cout << "After crop: " << image.cols << "x" << image.rows << std::endl;
+    }
+
+    // Convert to float32
+    cv::Mat image_float;
+    image.convertTo(image_float, CV_32F);
+
+    // Rescale (0-255 to 0-1)
+    if (do_rescale) {
+        image_float *= rescale_factor;
+    }
+
+    // Normalize with ImageNet stats
+    if (do_normalize) {
+        std::vector<cv::Mat> channels;
+        cv::split(image_float, channels);
+        for (int i = 0; i < 3; i++) {
+            channels[i] = (channels[i] - image_mean[i]) / image_std[i];
+        }
+        cv::merge(channels, image_float);
+    }
+
+    // Convert HWC to CHW format and add batch dimension
+    std::vector<float> result(1 * 3 * crop_size * crop_size);
+
+    // Copy data in CHW format (Channel-Height-Width)
+    for (int c = 0; c < 3; c++) {
+        for (int h = 0; h < crop_size; h++) {
+            for (int w = 0; w < crop_size; w++) {
+                int chw_idx = c * crop_size * crop_size + h * crop_size + w;
+                result[chw_idx] = image_float.at<cv::Vec3f>(h, w)[c];
+            }
+        }
+    }
+
+    std::cout << "Image processed: " << image_path << " -> shape [1, 3, " << crop_size << ", " << crop_size << "]" << std::endl;
+    return result;
+}
 
 // SimpleTokenizer class from problem1 with VLM extensions
 struct SimpleTokenizer {
@@ -111,19 +215,46 @@ int main() {
     SimpleTokenizer tokenizer(tokenizer_path);
 
     // 3. Set Hardcoded Parameters
-    //    - input_text: "Where was this photo taken?"
-    //    - image_path: "assets/test_image.png"
-    //    - output_path: "output.txt"
+    std::string input_text = "Where was this photo taken?";
+    std::string image_path = "../../llm_vlm_onnx_sample/assets/test_image.png";
+    std::string output_path = "output.txt";
+
+    std::cout << "Parameters set:" << std::endl;
+    std::cout << "  - Input text: " << input_text << std::endl;
+    std::cout << "  - Image path: " << image_path << std::endl;
+    std::cout << "  - Output path: " << output_path << std::endl;
 
     // 4. Image Processing Function (similar to run_vlm.py lines 36-90)
-    //    - Load image from path or URL
-    //    - Convert to RGB
-    //    - Resize to 224x224
-    //    - Center crop
-    //    - Rescale (0-255 to 0-1)
-    //    - Normalize with ImageNet stats
-    //    - Convert HWC to CHW format
-    //    - Add batch dimension (1, C, H, W)
+    auto image_tensor_data = process_image(image_path);
+
+    // Debug: Print image tensor stats
+    std::cout << "Image tensor debug info:" << std::endl;
+    std::cout << "  - Total size: " << image_tensor_data.size() << std::endl;
+    std::cout << "  - Expected size: " << (1 * 3 * 224 * 224) << std::endl;
+
+    // Print first and last few values
+    std::cout << "  - First 10 values: ";
+    for (int i = 0; i < std::min(10, (int)image_tensor_data.size()); i++) {
+        std::cout << std::fixed << std::setprecision(4) << image_tensor_data[i] << " ";
+    }
+    std::cout << std::endl;
+
+    std::cout << "  - Last 10 values: ";
+    int start_idx = std::max(0, (int)image_tensor_data.size() - 10);
+    for (int i = start_idx; i < image_tensor_data.size(); i++) {
+        std::cout << std::fixed << std::setprecision(4) << image_tensor_data[i] << " ";
+    }
+    std::cout << std::endl;
+
+    // Print min/max values (simple loop)
+    float min_val = image_tensor_data[0];
+    float max_val = image_tensor_data[0];
+    for (float val : image_tensor_data) {
+        if (val < min_val) min_val = val;
+        if (val > max_val) max_val = val;
+    }
+    std::cout << "  - Min value: " << std::fixed << std::setprecision(4) << min_val << std::endl;
+    std::cout << "  - Max value: " << std::fixed << std::setprecision(4) << max_val << std::endl;
 
     // 5. Prefill Step (similar to run_vlm.py lines 117-170)
     //    - Create prompt with image token: "<|im_start|>user\n<image>\n{query}<|im_end|>\n<|im_start|>assistant\n"
