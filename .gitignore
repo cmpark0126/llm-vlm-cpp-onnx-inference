@@ -34,3 +34,6 @@ llm_vlm_onnx_sample/
 .venv/
 env/
 .env
+
+# ONNX Runtime
+onnxruntime-linux-*

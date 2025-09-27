@@ -24,10 +24,7 @@ RUN ARCH=$(uname -m) && \
         echo "Unsupported architecture: $ARCH" && exit 1; \
     fi && \
     wget https://github.com/microsoft/onnxruntime/releases/download/v1.19.0/onnxruntime-linux-${ONNX_ARCH}-1.19.0.tgz \
-    && tar -xzf onnxruntime-linux-${ONNX_ARCH}-1.19.0.tgz \
-    && cp -r onnxruntime-linux-${ONNX_ARCH}-1.19.0/include/* /usr/local/include/ \
-    && cp -r onnxruntime-linux-${ONNX_ARCH}-1.19.0/lib/* /usr/local/lib/ \
-    && rm -rf onnxruntime-linux-${ONNX_ARCH}-1.19.0*
+    && tar -xzf onnxruntime-linux-${ONNX_ARCH}-1.19.0.tgz
 
 # Install Python dependencies for baseline execution
 COPY requirements.txt .
