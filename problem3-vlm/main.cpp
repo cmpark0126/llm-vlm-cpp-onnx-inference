@@ -13,6 +13,65 @@
 
 using json = nlohmann::json;
 
+// Constants
+const int64_t IMAGE_TOKEN_INDEX = 151646;
+const int MAX_GEN_LEN = 128;
+const bool USE_SAMPLING = true;
+
+// SimpleTokenizer class from problem1 with VLM extensions
+struct SimpleTokenizer {
+    std::string tokenizer_path;
+    json tokenizer_config;
+    std::map<std::string, int64_t> vocab;
+    std::map<int64_t, std::string> id_to_token;
+
+    SimpleTokenizer(const std::string& path) : tokenizer_path(path) {
+        // Load tokenizer config
+        std::ifstream config_file(tokenizer_path + "/tokenizer.json");
+        if (!config_file.is_open()) {
+            std::cerr << "Error: Could not load tokenizer from: " << tokenizer_path << std::endl;
+            exit(1);
+        }
+
+        config_file >> tokenizer_config;
+        config_file.close();
+
+        // Build vocab from model.vocab if exists
+        if (tokenizer_config.contains("model") && tokenizer_config["model"].contains("vocab")) {
+            std::cout << "Vocab found" << std::endl;
+            for (const auto& [key, value] : tokenizer_config["model"]["vocab"].items()) {
+                vocab[key] = value;
+                id_to_token[value] = key;
+            }
+        }
+
+        // Add special image token with hardcoded ID
+        vocab["<image>"] = IMAGE_TOKEN_INDEX;
+        id_to_token[IMAGE_TOKEN_INDEX] = "<image>";
+
+        std::cout << "Tokenizer loaded with " << vocab.size() << " tokens from: " << tokenizer_path
+                  << std::endl;
+        std::cout << "Added special token: <image> with ID: " << IMAGE_TOKEN_INDEX << std::endl;
+    }
+
+    std::vector<int64_t> encode(const std::string& text) {
+        // Simplified encoding - for VLM we'll need to handle special tokens
+        std::vector<int64_t> tokens;
+        // This is a placeholder - actual implementation would need proper tokenization
+        return tokens;
+    }
+
+    std::string decode(const std::vector<int64_t>& tokens) {
+        std::string result;
+        for (int64_t token_id : tokens) {
+            if (id_to_token.find(token_id) != id_to_token.end()) {
+                result += id_to_token[token_id];
+            }
+        }
+        return result;
+    }
+};
+
 int main() {
     std::cout << "Problem 3: VLM Text Generation" << std::endl;
 
@@ -48,8 +107,8 @@ int main() {
     std::cout << "  - Decoder: " << decoder_path << std::endl;
 
     // 2. Initialize Tokenizer (similar to run_vlm.py lines 26-27)
-    //    - Load tokenizer from "./vlm/tokenizer"
-    //    - Add special image token "<image>"
+    std::string tokenizer_path = "../../llm_vlm_onnx_sample/vlm/tokenizer";
+    SimpleTokenizer tokenizer(tokenizer_path);
 
     // 3. Set Hardcoded Parameters
     //    - input_text: "Where was this photo taken?"
