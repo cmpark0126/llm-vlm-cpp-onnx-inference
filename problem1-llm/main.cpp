@@ -16,41 +16,39 @@ using json = nlohmann::json;
 // Constants
 const int DEFAULT_BATCH_SIZE = 1;
 const int DEFAULT_MAX_NEW_TOKENS = 128;
-const int DEFAULT_PRINT_TENSOR_MAX_ELEMENTS = 10;
-const int DEFAULT_PRINT_TENSOR_MAX_ELEMENTS_EXTENDED = 20;
 const int DEFAULT_EOS_TOKEN_ID = 106;  // <end_of_turn>
 
-Ort::Value create_input_ids_tensor(const std::vector<int64_t>& input_ids, int batch_size,
+Ort::Value create_input_ids_tensor(const std::vector<int64_t>& input_ids,
                                    const Ort::MemoryInfo& memory_info) {
     int seq_len = input_ids.size();
-    std::vector<int64_t> input_ids_shape = {batch_size, seq_len};
+    std::vector<int64_t> input_ids_shape = {DEFAULT_BATCH_SIZE, seq_len};
 
     return Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(input_ids.data()),
                                              input_ids.size(), input_ids_shape.data(),
                                              input_ids_shape.size());
 }
 
-Ort::Value create_position_ids_tensor(const std::vector<int64_t>& position_ids, int batch_size,
+Ort::Value create_position_ids_tensor(const std::vector<int64_t>& position_ids,
                                       const Ort::MemoryInfo& memory_info) {
     int seq_len = position_ids.size();
-    std::vector<int64_t> position_ids_shape = {batch_size, seq_len};
+    std::vector<int64_t> position_ids_shape = {DEFAULT_BATCH_SIZE, seq_len};
 
     return Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(position_ids.data()),
                                              position_ids.size(), position_ids_shape.data(),
                                              position_ids_shape.size());
 }
 
-std::vector<Ort::Value> create_prefill_past_kv_tensors(int num_hidden_layers, int batch_size,
+std::vector<Ort::Value> create_prefill_past_kv_tensors(int num_hidden_layers,
                                                        int num_key_value_heads, int head_dim,
                                                        const Ort::MemoryInfo& memory_info) {
     std::vector<Ort::Value> past_kv_tensors;
-    std::vector<int64_t> past_kv_shape = {batch_size, num_key_value_heads, 0, head_dim};
+    std::vector<int64_t> past_kv_shape = {DEFAULT_BATCH_SIZE, num_key_value_heads, 0, head_dim};
 
     static std::vector<std::vector<float>> past_kv_data(num_hidden_layers * 2);
 
     for (int layer = 0; layer < num_hidden_layers; layer++) {
         // Empty tensors for initial pass (seq_len = 0 for past)
-        int data_size = batch_size * num_key_value_heads * 0 * head_dim;
+        int data_size = DEFAULT_BATCH_SIZE * num_key_value_heads * 0 * head_dim;
 
         // Key tensor
         past_kv_data[layer * 2].resize(data_size, 0.0f);
@@ -83,46 +81,6 @@ size_t get_peak_memory_usage() {
     return usage.ru_maxrss * 1024;  // convert KB to bytes
 }
 
-template <typename T>
-void print_tensor(const Ort::Value& tensor, const std::string& name,
-                  int max_elements = DEFAULT_PRINT_TENSOR_MAX_ELEMENTS) {
-    auto tensor_info = tensor.GetTensorTypeAndShapeInfo();
-    auto shape = tensor_info.GetShape();
-
-    std::cout << name << " tensor: shape [";
-    for (size_t i = 0; i < shape.size(); i++) {
-        std::cout << shape[i];
-        if (i < shape.size() - 1) std::cout << ", ";
-    }
-    std::cout << "], data: ";
-
-    const T* data = tensor.GetTensorData<T>();
-    size_t total_elements = 1;
-    for (auto dim : shape) {
-        total_elements *= dim;
-    }
-
-    std::cout << "[";
-    if (total_elements <= max_elements) {
-        for (size_t i = 0; i < total_elements; i++) {
-            std::cout << data[i];
-            if (i < total_elements - 1) std::cout << ", ";
-        }
-    } else {
-        // Print first few elements
-        for (int i = 0; i < max_elements / 2; i++) {
-            std::cout << data[i] << ", ";
-        }
-        std::cout << "..., ";
-        // Print last few elements
-        for (size_t i = total_elements - max_elements / 2; i < total_elements; i++) {
-            std::cout << data[i];
-            if (i < total_elements - 1) std::cout << ", ";
-        }
-    }
-    std::cout << "]" << std::endl;
-}
-
 int main() {
     std::cout << "Problem 1: LLM Text Generation" << std::endl;
 
@@ -146,24 +104,6 @@ int main() {
     int num_key_value_heads = config_json["num_key_value_heads"];
     int head_dim = config_json["head_dim"];
     int num_hidden_layers = config_json["num_hidden_layers"];
-    int eos_token_id = DEFAULT_EOS_TOKEN_ID;
-
-    // 2. Prepare inputs
-    LlmTokenizer tokenizer(path_to_tokenizer);
-
-    std::string prompt =
-        "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about "
-        "Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
-
-    // Preprocess prompt
-    std::string preprocessed_prompt = tokenizer.preprocess(prompt);
-
-    // Apply tokenizer
-    auto input_ids = tokenizer.encode(preprocessed_prompt);
-
-    // Prepare decoder inputs
-    int batch_size = DEFAULT_BATCH_SIZE;
-    int seq_len = input_ids.size();
 
     // Initialize ONNX Runtime
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
@@ -173,6 +113,16 @@ int main() {
     std::string model_path = path_to_model + "/q4f16.onnx";
     Ort::SessionOptions session_options;
     Ort::Session decoder_session(env, model_path.c_str(), session_options);
+
+    // Prepare input names
+    std::vector<const char*> input_names = {"input_ids", "position_ids"};
+    for (int layer = 0; layer < num_hidden_layers; layer++) {
+        static std::vector<std::string> kv_names;
+        kv_names.push_back("past_key_values." + std::to_string(layer) + ".key");
+        kv_names.push_back("past_key_values." + std::to_string(layer) + ".value");
+        input_names.push_back(kv_names[layer * 2].c_str());
+        input_names.push_back(kv_names[layer * 2 + 1].c_str());
+    }
 
     // Get all output names dynamically from the model
     Ort::AllocatorWithDefaultOptions allocator;
@@ -186,48 +136,40 @@ int main() {
         output_names[i] = output_names_storage[i].c_str();
     }
 
-    // Generation loop with performance measurements
-    std::vector<int64_t> generated_tokens;
+    // 2. Prepare inputs
+    LlmTokenizer tokenizer(path_to_tokenizer);
 
-    // Performance measurement variables
-    int64_t first_token_time_ms = 0;
-    std::vector<double> token_times_ms;
-    bool first_token_generated = false;
+    std::string prompt =
+        "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about "
+        "Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
+    std::string preprocessed_prompt = tokenizer.preprocess(prompt);
+    auto current_input_ids = tokenizer.encode(preprocessed_prompt);
 
-    // Prepare input names
-    std::vector<const char*> input_names = {"input_ids", "position_ids"};
-
-    // Add past_key_values input names
-    for (int layer = 0; layer < num_hidden_layers; layer++) {
-        static std::vector<std::string> kv_names;
-        kv_names.push_back("past_key_values." + std::to_string(layer) + ".key");
-        kv_names.push_back("past_key_values." + std::to_string(layer) + ".value");
-        input_names.push_back(kv_names[layer * 2].c_str());
-        input_names.push_back(kv_names[layer * 2 + 1].c_str());
-    }
-
-    // Current state variables
-    std::vector<int64_t> current_input_ids = input_ids;
     // position_ids = [1, 2, 3, ..., seq_len]
+    int seq_len = current_input_ids.size();
     std::vector<int64_t> current_position_ids;
     for (int i = 1; i <= seq_len; i++) {
         current_position_ids.push_back(i);
     }
+
     // Prefill past_kv_tensors, all tensors are empty
     std::vector<Ort::Value> current_past_kv_tensors = create_prefill_past_kv_tensors(
-        num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
+        num_hidden_layers, num_key_value_heads, head_dim, memory_info);
 
-    // Generation loop - start timing here
+    // Generation loop with performance measurements
+    std::vector<int64_t> generated_tokens;
     int64_t generation_start_ms = get_time_ms();
+    int64_t first_token_time_ms = 0;
+    bool first_token_generated = false;
 
+    // 3. Generation loop
     for (int i = 0; i < DEFAULT_MAX_NEW_TOKENS; i++) {
         int64_t token_start_ms = get_time_ms();
 
         // Create tensors for current iteration
-        auto current_input_ids_tensor =
-            create_input_ids_tensor(current_input_ids, batch_size, memory_info);
+        auto current_input_ids_tensor = create_input_ids_tensor(current_input_ids, memory_info);
         auto current_position_ids_tensor =
-            create_position_ids_tensor(current_position_ids, batch_size, memory_info);
+            create_position_ids_tensor(current_position_ids, memory_info);
 
         // Prepare input values for this iteration
         std::vector<Ort::Value> current_input_values;
@@ -246,11 +188,11 @@ int main() {
         const float* logits_data = outputs[0].GetTensorData<float>();
         auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
 
-        // logits shape: [batch_size, seq_len, vocab_size]
+        // logits shape: [DEFAULT_BATCH_SIZE, seq_len, vocab_size]
         int seq_len_out = logits_shape[1];
         int vocab_size = logits_shape[2];
 
-        // Get last token logits: logits[:, -1, :]
+        // Get last token logits
         int last_token_offset = (seq_len_out - 1) * vocab_size;
         const float* last_token_logits = logits_data + last_token_offset;
 
@@ -267,14 +209,9 @@ int main() {
         // Add to generated tokens
         generated_tokens.push_back(next_token_id);
 
-        // Measure token generation time
-        int64_t token_end_ms = get_time_ms();
-        double token_duration_ms = token_end_ms - token_start_ms;
-        token_times_ms.push_back(token_duration_ms);
-
         // Record first token time (TTFT)
         if (!first_token_generated) {
-            first_token_time_ms = token_end_ms;
+            first_token_time_ms = get_time_ms();
             first_token_generated = true;
         }
 
@@ -288,16 +225,14 @@ int main() {
         }
 
         // Check for EOS token
-        if (next_token_id == eos_token_id) {
+        if (next_token_id == DEFAULT_EOS_TOKEN_ID) {
             std::cout << std::endl;
             break;
         }
 
-        // Update state for next iteration (following Python logic)
-        // input_ids = logits[:, -1].argmax(-1, keepdims=True)
+        // Update state for next iteration
         current_input_ids = {next_token_id};
 
-        // position_ids = position_ids[:, -1:] + 1
         int64_t last_position = current_position_ids.back();
         current_position_ids = {last_position + 1};
 
@@ -310,19 +245,15 @@ int main() {
         }
     }
 
-    // Performance measurements
+    // 4. Performance measurements
     int64_t generation_end_ms = get_time_ms();
     double total_generation_time_ms = generation_end_ms - generation_start_ms;
 
     // Calculate TTFT (Time-to-First-Token)
     double ttft_ms = first_token_time_ms - generation_start_ms;
 
-    // Calculate TPOT (Time-Per-Output-Token) - average of all tokens except first
-    double total_subsequent_time = 0.0;
-    for (size_t i = 1; i < token_times_ms.size(); i++) {
-        total_subsequent_time += token_times_ms[i];
-    }
-    double tpot_ms = total_subsequent_time / (token_times_ms.size() - 1);
+    // Calculate TPOT (Time-Per-Output-Token) - average time per token excluding first token
+    double tpot_ms = (total_generation_time_ms - ttft_ms) / (generated_tokens.size() - 1);
 
     // Get peak memory usage
     size_t peak_memory = get_peak_memory_usage();
