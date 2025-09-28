@@ -11,3 +11,8 @@ FetchContent_MakeAvailable(json)
 add_library(LlmTokenizer LlmTokenizer.cpp)
 target_link_libraries(LlmTokenizer nlohmann_json::nlohmann_json)
 target_include_directories(LlmTokenizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+# Create VlmTokenizer library
+add_library(VlmTokenizer VlmTokenizer.cpp)
+target_link_libraries(VlmTokenizer nlohmann_json::nlohmann_json)
+target_include_directories(VlmTokenizer PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

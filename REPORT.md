@@ -13,34 +13,26 @@
 
 ### Problem 1: LLM 텍스트 생성
 **구현 내용:**
-- LLM 예제 구동에 필요한 Tokenizer 구현 (common/LlmTokenizer.*)
-  - python 예제에서 활용된 tokenizer의 동작을 바탕으로 text preprocess, encode, decode 구현
-- 주어진 ONNX 모델을 활용하여 LLM을 동작시키는 C++ 프로그램 작성 (problem1-llm/main.cpp)
-  - python 예제와 동일하게 loop의 처음에서 prefill 진행, 이후에 decode 동작을 수행하도록 구현
+- **LLM Tokenizer 구현** (common/LlmTokenizer.*)
+  - SentencePiece 스타일 토크나이저 구현 (공백을 `▁`로 변환)
+- **ONNX 기반 LLM 추론 엔진** (problem1-llm/main.cpp)
 
 **성능 고려 사항:**
-- 이전에 만들어진 KV Cache는 메모리 복사 없이 소유권 전달로 다음 Decode 과정에서 활용
-- 이외에는 크게 성능 향상에 도움될만한 포인트를 찾지 못함
+- **메모리 연산 최적화**: KV cache에서 move 활용으로 불필요한 복사 제거
 
 **결과:**
-- C++ 프로그램과 Python 예제가 동일한 결과물 출력하는 것 확인
+- **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
 
 **성능 지표:**
 | 지표 | 값 |
 |------|-----|
-| TTFT (Time-to-First-Token) | 1107 ms |
+| TTFT (Time-to-First-Token) | 1,107 ms |
 | TPOT (Time-Per-Output-Token) | 414.964 ms |
-| Peak Memory Usage | 3614.18 MB |
+| Peak Memory Usage | 3,614.18 MB |
 
-(TODO: 무언가 비교하는게 좋아보이는데?)
-(TODO: 여러번 측정한 평균값?)
-(TODO: 어떤 환경에서 측정한 것인지 맨 위에 적어두는 것이 좋아보이지?)
-(TODO: 스트리밍 프린팅이 약간의 딜레이를 만들어낼 수 있긴 하겠지만, 실제 측정 결과 큰 차이가 없어 따로 끄지는 않음)
-(초기 메모리 할당 과정을 최적화하면 괜찮아 질지도? 일단 파이썬과 비교한거 넣기)
-
-
-**향후 계획:**
-- Tokenizer가 주어진 예제 이외의 예제로 동작시켜보거나 하지 않아 일반화가 부족할 수 있는 상태이기에 수정 필요
+**향후 개선 방안:**
+- **일반화 개선**: 다양한 프롬프트와 토큰 길이에 대한 테스트 확대
+- **성능 최적화**: ONNX 모델 양자화 및 그래프 최적화 적용
 
 ### Problem 2: Static Graph Export & 텍스트 생성
 **구현 내용:**
@@ -61,15 +53,73 @@
 - ONNX 모델 최적화? Layer 퓨전?
 
 ### Problem 3: VLM 텍스트 생성
-**구현 내용:**
-- f16을 다루는 부분
+**사전 작업:**
+- 프롬프트 수정으로 이미지 토큰 처리 테스트 수행
+  ```
+  <|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n
+  ```
+  - 기존 프롬프트에 누락된 `<image>` 태그 추가
+  - 오타 수정으로 정확한 토큰화 보장
 
-**성능 관련 고려 사항:**
-- TODO
+**구현 내용:**
+- **VLM Tokenizer 구현** (common/VlmTokenizer.*)
+  - GPT 스타일 토크나이저 구현 (공백을 Ġ, 개행을 Ċ으로 변환)
+  - 특수 토큰 `<image>` 처리
+- **멀티모달 임베딩 처리**
+  - Text embedding (float16) → float32 변환 함수 구현
+  - 이미지 토큰 위치에 197개 image embedding 삽입
+
+**성능 고려 사항:**
+- **메모리 최적화**: KV cache에서 move 활용으로 불필요한 복사 제거
 
 **결과:**
-- TODO: 베이스라인 대비 성능 비교
+- **기능 검증**: C++와 Python 구현이 거의 동일한 결과 출력 확인. 정확히 같지 않은 이유는 이미지 처리 과정에서 오차가 발생하여 그런 것으로 확인
+
+```bash
+# Python (run_vlm.py)
+"The image is likely from a city in Asia, as it features a city skyline with tall buildings,
+a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
+that it is likely a densely populated urban area with a mix of modern and traditional
+architecture. The night setting adds to the atmosphere of the scene, making it a visually
+appealing and captivating image."
+
+# C++ (problem3-vlm)
+"The image is likely from a city in Asia, as it features a city skyline with tall buildings,
+a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
+that it is likely a densely populated urban area. The night view of the city also adds to
+the atmosphere, making it a visually appealing scene."
+```
+
+**성능 지표:**
+| 지표 | 값 |
+|------|-----|
+| TTFT (Time-to-First-Token) | 1,029 ms |
+| TPOT (Time-Per-Output-Token) | 34.4 ms |
+| Peak Memory Usage | 3,510.42 MB |
+
+**향후 계획:**
+- 모든 모델들이 f16을 사용하도록 양자화 하는 방법 고려
+- text embedding 모델이 f32를 사용하도록 변경하는 방법 고려
+- text embedding, image embedding 합칠 때, 더 효율적으로 진행하는 방법 고려
 
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
 - Peak Memory Usage: [getrusage(2)](https://man7.org/linux/man-pages/man2/getrusage.2.html)
+
+## TODO
+- python과의 성능 비교가 정확히 같은 부분을 비교하도록 구현되어있는 것이 맞는지 점검
+- 필요시 C++ 프로파일링도 진행해서, 고치지는 못하더라도 어디를 최적화하면 좋을지 보고서에 넣기 (성능 비교 과정에서)
+* 결과가 문제가 없는지(예: 추론, 벤치마크 등), 배점을 기반으로 점수 예측 수행
+* 코드 품질 향상 (모듈화, 불필요한 코드 제거, 주석 작성 등)
+* README.md 도 그냥 바로 처음부터 쭉 따라할 수 있는 방식으로 변경
+* 1차 보고서 작성 (최적화 작업 전에 최소 제출을 위해)
+  * 코드 품질 향상 후 이를 기반으로 보고서 작성
+    * 평가 기준 등 잘 살필 것
+  * 개발 진행하면서 어떤게 힘들었는지
+    * problem1: C++ 자체가 너무 오랜만
+    * problem2: Static 그래프 뽑기 위해서 커스터마이즈가 필요했음, onnx runtime 출력에 대한 사전 할당 등이 생각대로 되지 않아 난감.
+    * problem3: text embedding이 float16이라는 스펙을 간과하여 디버깅이 오래걸림
+* 추가 최적화 진행
+  * 기타: O3 컴파일, ONNX 최적화, TensorRT 등 활용, 복사 최소화, 메모리 재활용 고려, 그래프 최적화 등을 고려해볼 수 있을지도..?
+* 2차 보고서 작성 (최적화 작업 후에 최선의 결과 제출을 위해)
+(TODO: 무언가 비교하는게 좋아보이는데?) (TODO: 여러번 측정한 평균값?) (TODO: 어떤 환경에서 측정한 것인지 맨 위에 적어두는 것이 좋아보이지?) (TODO: 스트리밍 프린팅이 약간의 딜레이를 만들어낼 수 있긴 하겠지만, 실제 측정 결과 큰 차이가 없어 따로 끄지는 않음) (초기 메모리 할당 과정을 최적화하면 괜찮아 질지도? 일단 파이썬과 비교한거 넣기)
