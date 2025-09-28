@@ -444,14 +444,11 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
 }
 
 // Decode function with performance measurement
-void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& decoding_session,
-                                 std::vector<Ort::Value> past_kv_values, int first_token,
-                                 int input_token_len, Ort::MemoryInfo& memory_info,
-                                 Ort::AllocatorWithDefaultOptions& allocator,
-                                 const VlmTokenizer& tokenizer, const std::string& output_path,
-                                 std::vector<double>& token_times_ms) {
-    auto decode_start = std::chrono::high_resolution_clock::now();
-
+std::vector<int64_t> run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session,
+                                std::vector<Ort::Value> past_kv_values, int first_token,
+                                int input_token_len, Ort::MemoryInfo& memory_info,
+                                Ort::AllocatorWithDefaultOptions& allocator,
+                                const VlmTokenizer& tokenizer) {
     std::vector<int64_t> generated_ids = {first_token};
     int next_token = first_token;
     int current_token_len = input_token_len;
@@ -459,8 +456,6 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
     std::cout << tokenizer.decode({first_token}) << std::flush;
 
     for (int step = 0; step < MAX_GEN_LEN; step++) {
-        int64_t token_start_ms = get_time_ms();
-
         // Get next token embedding
         auto next_hidden_states =
             run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
@@ -572,29 +567,12 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
 
         std::cout << tokenizer.decode({next_token}) << std::flush;
 
-        // Measure token generation time
-        int64_t token_end_ms = get_time_ms();
-        double token_duration_ms = token_end_ms - token_start_ms;
-        token_times_ms.push_back(token_duration_ms);
-
-        // Save generated token (at the end like Python code)
+        // Save generated token
         generated_ids.push_back(next_token);
     }
 
-    auto decode_end = std::chrono::high_resolution_clock::now();
-    auto decode_duration = std::chrono::duration<double>(decode_end - decode_start).count();
-
-    // Decode full response
-    std::string response = tokenizer.decode(generated_ids);
-
-    // Write to output file
-    std::ofstream output_file(output_path);
-    if (output_file.is_open()) {
-        output_file << response;
-        output_file.close();
-    } else {
-        std::cerr << "Error: Could not write to output file: " << output_path << std::endl;
-    }
+    std::cout << std::endl;
+    return generated_ids;
 }
 
 int main() {
@@ -627,7 +605,6 @@ int main() {
     // 3. Set Hardcoded Parameters
     std::string input_text = "Where was this photo taken?";
     std::string image_path = "../../llm_vlm_onnx_sample/assets/test_image.png";
-    std::string output_path = "output.txt";
 
     // 4. Image Processing Function (similar to run_vlm.py lines 36-90)
     auto image_tensor_data = process_image(image_path);
@@ -717,45 +694,36 @@ int main() {
     int next_token = prefill_result.first;
     std::vector<Ort::Value> past_kv_values = std::move(prefill_result.second);
 
-    // Measure TTFT (Time-to-First-Token)
-    int64_t first_token_time_ms = get_time_ms();
-    double ttft_ms = first_token_time_ms - generation_start_ms;
+    // 5. Record TTFT (Time-to-First-Token) after prefill
+    int64_t ttft_end_ms = get_time_ms();
+    double ttft_ms = ttft_end_ms - generation_start_ms;
 
-    // 6. Decode Step (similar to run_vlm.py lines 216-271) with performance measurement
+    // 6. Decode Step
     int64_t decode_start_ms = get_time_ms();
-    std::vector<double> token_times_ms;
 
-    // Modified run_decode call to return performance data
-    run_decode_with_performance(text_emb_session, decoding_session, std::move(past_kv_values),
-                                next_token, input_token_len, memory_info, allocator, tokenizer,
-                                output_path, token_times_ms);
+    auto generated_tokens =
+        run_decode(text_emb_session, decoding_session, std::move(past_kv_values), next_token,
+                   input_token_len, memory_info, allocator, tokenizer);
 
     // Performance measurements
     int64_t generation_end_ms = get_time_ms();
     double total_generation_time_ms = generation_end_ms - generation_start_ms;
+    double decode_time_ms = generation_end_ms - decode_start_ms;
 
-    // Calculate TPOT (Time-Per-Output-Token) - average of all tokens except first
-    double total_subsequent_time = 0.0;
-    for (size_t i = 0; i < token_times_ms.size(); i++) {
-        total_subsequent_time += token_times_ms[i];
-    }
+    // Calculate TPOT (Time-Per-Output-Token) - decode time per generated token
     double tpot_ms =
-        token_times_ms.size() > 0 ? total_subsequent_time / token_times_ms.size() : 0.0;
+        generated_tokens.size() > 1 ? decode_time_ms / (generated_tokens.size() - 1) : 0.0;
 
     // Get peak memory usage
     size_t peak_memory = get_peak_memory_usage();
 
     // Print performance metrics
     std::cout << "\n=== Performance Metrics ===" << std::endl;
-    std::cout << "Time-to-First-Token (TTFT): " << std::fixed << std::setprecision(2) << ttft_ms
-              << " ms" << std::endl;
-    std::cout << "Time-Per-Output-Token (TPOT): " << std::fixed << std::setprecision(2) << tpot_ms
-              << " ms" << std::endl;
-    std::cout << "Peak Memory Usage: " << std::fixed << std::setprecision(2)
-              << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Total Generation Time: " << std::fixed << std::setprecision(2)
-              << total_generation_time_ms << " ms" << std::endl;
-    std::cout << "Total Tokens Generated: " << (1 + token_times_ms.size()) << std::endl;
+    std::cout << "Time-to-First-Token (TTFT): " << ttft_ms << " ms" << std::endl;
+    std::cout << "Time-Per-Output-Token (TPOT): " << tpot_ms << " ms" << std::endl;
+    std::cout << "Peak Memory Usage: " << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
+    std::cout << "Total Generation Time: " << total_generation_time_ms << " ms" << std::endl;
+    std::cout << "Total Tokens Generated: " << generated_tokens.size() << std::endl;
 
     return 0;
 }
