@@ -322,14 +322,14 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
 }
 
 // Unified inference function for both prefill and decode
-std::pair<int, std::vector<Ort::Value>> run_inference(
-    Ort::Session& decoding_session, const std::vector<float>& hidden_states_float32,
+std::pair<int, std::vector<Ort::Value>> run_language_model(
+    Ort::Session& language_model_session, const std::vector<float>& hidden_states_float32,
     int sequence_length, std::vector<Ort::Value>* past_kv_values, int current_position,
     Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator,
     const VlmTokenizer& tokenizer) {
-    // Get input/output names from decoder session
-    size_t decoder_input_count = decoding_session.GetInputCount();
-    size_t decoder_output_count = decoding_session.GetOutputCount();
+    // Get input/output names from language model session
+    size_t decoder_input_count = language_model_session.GetInputCount();
+    size_t decoder_output_count = language_model_session.GetOutputCount();
 
     std::vector<Ort::AllocatedStringPtr> decoder_input_name_ptrs;
     std::vector<Ort::AllocatedStringPtr> decoder_output_name_ptrs;
@@ -337,12 +337,14 @@ std::pair<int, std::vector<Ort::Value>> run_inference(
     std::vector<const char*> decoder_output_names;
 
     for (size_t i = 0; i < decoder_input_count; i++) {
-        decoder_input_name_ptrs.push_back(decoding_session.GetInputNameAllocated(i, allocator));
+        decoder_input_name_ptrs.push_back(
+            language_model_session.GetInputNameAllocated(i, allocator));
         decoder_input_names.push_back(decoder_input_name_ptrs.back().get());
     }
 
     for (size_t i = 0; i < decoder_output_count; i++) {
-        decoder_output_name_ptrs.push_back(decoding_session.GetOutputNameAllocated(i, allocator));
+        decoder_output_name_ptrs.push_back(
+            language_model_session.GetOutputNameAllocated(i, allocator));
         decoder_output_names.push_back(decoder_output_name_ptrs.back().get());
     }
 
@@ -383,9 +385,9 @@ std::pair<int, std::vector<Ort::Value>> run_inference(
     decoder_input_values.push_back(std::move(hidden_states_tensor));
 
     // Run inference
-    auto outputs = decoding_session.Run(Ort::RunOptions{nullptr}, decoder_input_names.data(),
-                                        decoder_input_values.data(), decoder_input_values.size(),
-                                        decoder_output_names.data(), decoder_output_count);
+    auto outputs = language_model_session.Run(
+        Ort::RunOptions{nullptr}, decoder_input_names.data(), decoder_input_values.data(),
+        decoder_input_values.size(), decoder_output_names.data(), decoder_output_count);
 
     // Process logits and get next token
     auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
@@ -422,7 +424,7 @@ std::pair<int, std::vector<Ort::Value>> run_inference(
 }
 
 // Prefill function (wrapper for unified inference)
-std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session,
+std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& language_model_session,
                                                     const std::vector<float>& hidden_states_float32,
                                                     int input_token_len,
                                                     Ort::MemoryInfo& memory_info,
@@ -448,12 +450,13 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
     }
 
     // Create empty KV cache tensors for prefill
-    return run_inference(decoding_session, hidden_states_float32, input_token_len,
-                         &empty_past_kv_values, 0, memory_info, allocator, tokenizer);
+    return run_language_model(language_model_session, hidden_states_float32, input_token_len,
+                              &empty_past_kv_values, 0, memory_info, allocator, tokenizer);
 }
 
 // Decode function (wrapper for unified inference)
-std::vector<int64_t> run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session,
+std::vector<int64_t> run_decode(Ort::Session& text_emb_session,
+                                Ort::Session& language_model_session,
                                 std::vector<Ort::Value> past_kv_values, int first_token,
                                 int input_token_len, Ort::MemoryInfo& memory_info,
                                 Ort::AllocatorWithDefaultOptions& allocator,
@@ -470,8 +473,9 @@ std::vector<int64_t> run_decode(Ort::Session& text_emb_session, Ort::Session& de
             run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
 
         // Use unified inference function for decode
-        auto result = run_inference(decoding_session, next_hidden_states, 1, &past_kv_values,
-                                    current_token_len, memory_info, allocator, tokenizer);
+        auto result =
+            run_language_model(language_model_session, next_hidden_states, 1, &past_kv_values,
+                               current_token_len, memory_info, allocator, tokenizer);
 
         next_token = result.first;
         past_kv_values = std::move(result.second);
@@ -521,7 +525,7 @@ int main() {
 
     Ort::Session image_emb_session(env, vision_encoder_path.c_str(), session_options);
     Ort::Session text_emb_session(env, token_embedding_path.c_str(), session_options);
-    Ort::Session decoding_session(env, decoder_path.c_str(), session_options);
+    Ort::Session language_model_session(env, decoder_path.c_str(), session_options);
 
     // 2. Initialize Tokenizer
     std::string tokenizer_path = "../../llm_vlm_onnx_sample/vlm/tokenizer";
@@ -613,8 +617,8 @@ int main() {
     std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), HIDDEN_SIZE};
 
     // 5. Prefill Step
-    auto prefill_result = run_prefill(decoding_session, hidden_states_float32, input_token_len,
-                                      memory_info, allocator, tokenizer);
+    auto prefill_result = run_prefill(language_model_session, hidden_states_float32,
+                                      input_token_len, memory_info, allocator, tokenizer);
     int next_token = prefill_result.first;
     std::vector<Ort::Value> past_kv_values = std::move(prefill_result.second);
 
@@ -626,7 +630,7 @@ int main() {
     int64_t decode_start_ms = get_time_ms();
 
     auto generated_tokens =
-        run_decode(text_emb_session, decoding_session, std::move(past_kv_values), next_token,
+        run_decode(text_emb_session, language_model_session, std::move(past_kv_values), next_token,
                    input_token_len, memory_info, allocator, tokenizer);
 
     // Performance measurements
