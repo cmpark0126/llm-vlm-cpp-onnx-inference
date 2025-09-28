@@ -218,26 +218,6 @@ int top_p_sampling(const float* logits, int vocab_size, float top_p = 0.99f) {
     return logit_pairs[selected_idx].second;
 }
 
-std::string escape_special_chars(const std::string& text) {
-    std::string escaped_text = text;
-    size_t pos = 0;
-    while ((pos = escaped_text.find('\n', pos)) != std::string::npos) {
-        escaped_text.replace(pos, 1, "\\n");
-        pos += 2;
-    }
-    pos = 0;
-    while ((pos = escaped_text.find('\t', pos)) != std::string::npos) {
-        escaped_text.replace(pos, 1, "\\t");
-        pos += 2;
-    }
-    pos = 0;
-    while ((pos = escaped_text.find('\r', pos)) != std::string::npos) {
-        escaped_text.replace(pos, 1, "\\r");
-        pos += 2;
-    }
-    return escaped_text;
-}
-
 // Performance measurement functions
 static int64_t get_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -346,8 +326,6 @@ std::vector<float> process_image(const std::string& image_path) {
 
     return result;
 }
-
-// VlmTokenizer class from common directory
 
 // Prefill function
 std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session,
