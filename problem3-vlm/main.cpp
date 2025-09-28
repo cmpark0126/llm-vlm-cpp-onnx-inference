@@ -55,7 +55,7 @@ class SimpleTokenizer;
 // Constants
 const int64_t IMAGE_TOKEN_INDEX = 151646;
 const int MAX_GEN_LEN = 128;
-const bool USE_SAMPLING = true;  // true for top-p sampling, false for argmax
+const bool USE_SAMPLING = false;  // true for top-p sampling, false for argmax
 
 // Text embedding function
 std::vector<float> run_text_embedding(Ort::Session& text_emb_session,
