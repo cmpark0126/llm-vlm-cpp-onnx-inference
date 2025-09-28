@@ -51,16 +51,7 @@ hf auth login
 cd ..
 
 # 문제 3: VLM 텍스트 생성
-# NOTE: "<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n"로 prompt 변경하여 테스트 수행
-# - 이유1: 기존에는 image tag가 없음
-# - 이유2: 기존에는 사소한 typo 존재
 cd problem3-vlm
 ./run.sh
 cd ..
-
-# 이미지 프로세싱의 차이로 인해 뒤로 갈 수록 결과물이 달라지는 것으로 보임.
-# run_vlm.py (with not USE_SAMPLING)
-"The image is likely from a city in Asia, as it features a city skyline with tall buildings, a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest that it is likely a densely populated urban area with a mix of modern and traditional architecture. The night setting adds to the atmosphere of the scene, making it a visually appealing and captivating image."
-# ./run.sh (with not USE_SAMPLING)
-"The image is likely from a city in Asia, as it features a city skyline with tall buildings, a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest that it is likely a densely populated urban area. The night view of the city also adds to the atmosphere, making it a visually appealing scene."
 ```
