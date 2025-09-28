@@ -40,7 +40,7 @@ Ort::Value create_position_ids_tensor(const std::vector<int64_t>& position_ids, 
                                              position_ids_shape.size());
 }
 
-std::vector<Ort::Value> create_past_kv_tensors(int num_hidden_layers, int batch_size,
+std::vector<Ort::Value> create_prefill_past_kv_tensors(int num_hidden_layers, int batch_size,
                                                int num_key_value_heads, int head_dim,
                                                const Ort::MemoryInfo& memory_info) {
     std::vector<Ort::Value> past_kv_tensors;
@@ -65,40 +65,6 @@ std::vector<Ort::Value> create_past_kv_tensors(int num_hidden_layers, int batch_
             memory_info, past_kv_data[layer * 2 + 1].data(), past_kv_data[layer * 2 + 1].size(),
             past_kv_shape.data(), past_kv_shape.size());
         past_kv_tensors.push_back(std::move(value_tensor));
-    }
-
-    return past_kv_tensors;
-}
-
-std::vector<Ort::Value> create_past_kv_tensors_from_present(
-    const std::vector<Ort::Value>& present_kv_outputs, int num_hidden_layers,
-    const Ort::MemoryInfo& memory_info) {
-    std::vector<Ort::Value> past_kv_tensors;
-
-    // present_kv_outputs contains outputs[1], outputs[2], ... (outputs[0] is logits)
-    // Each output is a key or value tensor for a layer
-    for (size_t i = 0; i < present_kv_outputs.size(); i++) {
-        const auto& present_tensor = present_kv_outputs[i];
-        auto tensor_info = present_tensor.GetTensorTypeAndShapeInfo();
-        auto shape = tensor_info.GetShape();
-
-        // Copy data from present to new tensor
-        const float* present_data = present_tensor.GetTensorData<float>();
-        size_t data_size = 1;
-        for (auto dim : shape) data_size *= dim;
-
-        static std::vector<std::vector<float>> kv_data_storage;
-        if (kv_data_storage.size() < present_kv_outputs.size()) {
-            kv_data_storage.resize(present_kv_outputs.size());
-        }
-
-        kv_data_storage[i].resize(data_size);
-        std::copy(present_data, present_data + data_size, kv_data_storage[i].begin());
-
-        auto past_tensor = Ort::Value::CreateTensor<float>(memory_info, kv_data_storage[i].data(),
-                                                           data_size, shape.data(), shape.size());
-
-        past_kv_tensors.push_back(std::move(past_tensor));
     }
 
     return past_kv_tensors;
@@ -173,11 +139,6 @@ int main() {
     }
 
     json config_json;
-    if (config_file.peek() == std::ifstream::traits_type::eof()) {
-        std::cerr << "Error: Config file is empty: " << config_path << std::endl;
-        return 1;
-    }
-
     config_file >> config_json;
     config_file.close();
 
@@ -208,19 +169,6 @@ int main() {
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
-    // Create ONNX tensors
-    auto input_ids_tensor = create_input_ids_tensor(input_ids, batch_size, memory_info);
-
-    // Create initial position_ids vector
-    std::vector<int64_t> initial_position_ids;
-    for (int i = 1; i <= seq_len; i++) {
-        initial_position_ids.push_back(i);
-    }
-    auto position_ids_tensor =
-        create_position_ids_tensor(initial_position_ids, batch_size, memory_info);
-    auto past_kv_tensors = create_past_kv_tensors(num_hidden_layers, batch_size,
-                                                  num_key_value_heads, head_dim, memory_info);
-
     // Load ONNX model
     std::string model_path = path_to_model + "/q4f16.onnx";
     Ort::SessionOptions session_options;
@@ -239,7 +187,6 @@ int main() {
     }
 
     // Generation loop with performance measurements
-    int max_new_tokens = DEFAULT_MAX_NEW_TOKENS;
     std::vector<int64_t> generated_tokens;
 
     // Performance measurement variables
@@ -261,17 +208,19 @@ int main() {
 
     // Current state variables
     std::vector<int64_t> current_input_ids = input_ids;
+    // position_ids = [1, 2, 3, ..., seq_len]
     std::vector<int64_t> current_position_ids;
     for (int i = 1; i <= seq_len; i++) {
         current_position_ids.push_back(i);
     }
-    std::vector<Ort::Value> current_past_kv_tensors = create_past_kv_tensors(
+    // Prefill past_kv_tensors, all tensors are empty
+    std::vector<Ort::Value> current_past_kv_tensors = create_prefill_past_kv_tensors(
         num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
 
     // Generation loop - start timing here
     int64_t generation_start_ms = get_time_ms();
 
-    for (int i = 0; i < max_new_tokens; i++) {
+    for (int i = 0; i < DEFAULT_MAX_NEW_TOKENS; i++) {
         int64_t token_start_ms = get_time_ms();
 
         // Create tensors for current iteration
@@ -298,7 +247,6 @@ int main() {
         auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
 
         // logits shape: [batch_size, seq_len, vocab_size]
-        int batch_size_out = logits_shape[0];
         int seq_len_out = logits_shape[1];
         int vocab_size = logits_shape[2];
 
@@ -355,17 +303,10 @@ int main() {
 
         // Update past_key_values with present_key_values from outputs
         // outputs[0] = logits, outputs[1..] = present_key_values
-        if (outputs.size() > 1) {
-            std::vector<Ort::Value> present_kv_outputs;
-            for (size_t j = 1; j < outputs.size(); j++) {
-                // Move outputs[j] to present_kv_outputs (outputs[0] is logits)
-                present_kv_outputs.push_back(std::move(outputs[j]));
-            }
-            current_past_kv_tensors = create_past_kv_tensors_from_present(
-                present_kv_outputs, num_hidden_layers, memory_info);
-        } else {
-            current_past_kv_tensors = create_past_kv_tensors(
-                num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
+        current_past_kv_tensors.clear();
+        for (size_t j = 1; j < outputs.size(); j++) {
+            // Move outputs[j] directly to current_past_kv_tensors (outputs[0] is logits)
+            current_past_kv_tensors.push_back(std::move(outputs[j]));
         }
     }
 
@@ -381,8 +322,7 @@ int main() {
     for (size_t i = 1; i < token_times_ms.size(); i++) {
         total_subsequent_time += token_times_ms[i];
     }
-    double tpot_ms =
-        token_times_ms.size() > 1 ? total_subsequent_time / (token_times_ms.size() - 1) : 0.0;
+    double tpot_ms = total_subsequent_time / (token_times_ms.size() - 1);
 
     // Get peak memory usage
     size_t peak_memory = get_peak_memory_usage();
