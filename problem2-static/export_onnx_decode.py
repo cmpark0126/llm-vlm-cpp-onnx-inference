@@ -204,12 +204,6 @@ class StaticGemmaDecode(nn.Module):
         # 어휘 사전 크기로 투영하여 다음 토큰 확률 계산
         logits = self.lm_head(hidden_states)
 
-        # Logit softcapping 적용
-        if self.config.final_logit_softcapping is not None:
-            logits = logits / self.config.final_logit_softcapping
-            logits = torch.tanh(logits)
-            logits = logits * self.config.final_logit_softcapping
-
         # 8. ONNX 호환 출력 변환
         flattened_outputs = [logits]
 

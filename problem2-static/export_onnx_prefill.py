@@ -50,24 +50,7 @@ class StaticGemmaPrefill(nn.Module):
     def _prepare_static_components(self):
         # 정적 컴포넌트들 미리 계산 (위치 ID, 마스크, KV cache 구조)
 
-        # 1. 정적 캐시 위치 (prefill 단계: 0부터 seq_length-1까지)
-        self.register_buffer(
-            "static_cache_position",
-            torch.arange(0, self.seq_length, dtype=torch.long)
-        )
-
-        # 2. 정적 위치 ID (prefill에서는 cache_position과 동일)
-        # 형태: [1, seq_length] = [1, 128]
-        self.register_buffer(
-            "static_position_ids",
-            torch.arange(0, self.seq_length, dtype=torch.long).unsqueeze(0)
-        )
-
-        # 3. 각 attention 타입별 causal mask 미리 계산
         self._prepare_static_masks()
-
-        # 4. 정적 KV cache 구조 초기화
-        self._prepare_static_kv_cache()
 
     def _prepare_static_masks(self):
         # Causal mask와 sliding window mask 미리 계산
@@ -80,7 +63,7 @@ class StaticGemmaPrefill(nn.Module):
         )
 
         # 전체 attention용 마스크 (표준 causal mask)
-        self.register_buffer("static_full_attention_mask", causal_mask)
+        self.static_full_attention_mask = causal_mask
 
         # Sliding window attention 마스크 (설정된 경우)
         if (
@@ -96,28 +79,10 @@ class StaticGemmaPrefill(nn.Module):
                 if start_pos > 0:
                     sliding_mask[i, :start_pos] = float("-inf")
 
-            self.register_buffer("static_sliding_attention_mask", sliding_mask)
+            self.static_sliding_attention_mask = sliding_mask
         else:
             # Sliding window가 설정되지 않은 경우 일반 causal mask 사용
-            self.register_buffer("static_sliding_attention_mask", causal_mask)
-
-    def _prepare_static_kv_cache(self):
-        # KV cache 구조 및 메타데이터 초기화
-
-        num_layers = len(self.layers)
-        num_key_value_heads = getattr(
-            self.config, "num_key_value_heads", self.config.num_attention_heads
-        )
-        head_dim = self.config.hidden_size // self.config.num_attention_heads
-
-        # KV cache의 고정된 형태 정의
-        # 형태: [batch_size, num_heads, seq_len, head_dim]
-        self.static_k_cache_shape = (1, num_key_value_heads, self.seq_length, head_dim)
-        self.static_v_cache_shape = (1, num_key_value_heads, self.seq_length, head_dim)
-
-
-        # 레이어 수 정보를 버퍼에 저장 (ONNX 호환성을 위해)
-        self.register_buffer("cache_layers_info", torch.tensor(num_layers))
+            self.static_sliding_attention_mask = causal_mask
 
     def _create_static_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
         # 패딩 마스크를 4D additive mask로 변환
@@ -138,10 +103,8 @@ class StaticGemmaPrefill(nn.Module):
         return attention_mask_float
 
     def forward(self, input_ids: torch.LongTensor, attention_mask: torch.Tensor,
-                position_ids: Optional[torch.LongTensor] = None) -> Tuple[torch.Tensor, ...]:
+                position_ids: torch.LongTensor) -> Tuple[torch.Tensor, ...]:
         # Prefill 단계: 전체 시퀀스 처리하여 logits와 KV cache 생성
-
-        batch_size = input_ids.shape[0]
 
         # 1. 입력 크기 검증
         assert (
@@ -153,10 +116,6 @@ class StaticGemmaPrefill(nn.Module):
 
         # 2. 토큰 임베딩 변환
         inputs_embeds = self.embed_tokens(input_ids)
-
-        # 3. 위치 ID 설정
-        if position_ids is None:
-            position_ids = self.static_position_ids.expand(batch_size, -1)
 
         # 4. Attention mask 생성
         input_attention_mask = self._create_static_attention_mask(attention_mask)
@@ -216,12 +175,6 @@ class StaticGemmaPrefill(nn.Module):
 
         # 9. Logits 생성
         logits = self.lm_head(hidden_states)
-
-        # Logit softcapping 적용
-        if self.config.final_logit_softcapping is not None:
-            logits = logits / self.config.final_logit_softcapping
-            logits = torch.tanh(logits)
-            logits = logits * self.config.final_logit_softcapping
 
         # 10. ONNX 호환 출력 변환
         flattened_outputs = [logits]
