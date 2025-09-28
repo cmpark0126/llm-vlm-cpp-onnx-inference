@@ -1,0 +1,57 @@
+# Build directories
+*/build/
+build/
+
+# C++ compiled files
+*.o
+*.so
+*.a
+*.exe
+
+# Executables
+problem1_llm
+problem2_static
+problem3_vlm
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Model files
+*.onnx
+llm_vlm_onnx_sample/
+
+# Gemma model directories
+problem2-static/gemma-*
+
+# IDE
+.vscode/
+.idea/
+.ropeproject/
+
+# Temporary files
+*.tmp
+*.log
+
+# Python virtual environments
+.venv/
+env/
+.env
+
+# ONNX Runtime
+onnxruntime-linux-*
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# CI/CD
+.github/
+
+# Documentation
+*.md

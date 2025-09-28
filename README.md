@@ -1,16 +1,23 @@
 # LLM/VLM C++ ONNX Inference
 
 ## Docker 개발 & 실행 환경
-Local 환경에서:
+Docker Hub에서 이미지 사용:
+```bash
+docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it cmpark0126/llm-vlm-cpp-onnx-inference:latest
+# 또는 특정 커밋 해시 버전
+# docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it cmpark0126/llm-vlm-cpp-onnx-inference:{commit-hash}
+$ ... # 컨테이너 내부 자동 진입
+```
+
+로컬에서 빌드하는 경우:
 ```bash
 docker build -t llm-vlm-dev .
-docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -d llm-vlm-dev sleep infinity
-docker exec -it llm-vlm-dev /bin/bash
-$ chmod +x install_onnxruntime.sh
-$ ./install_onnxruntime.sh
-$ . .venv/bin/activate
-$ ...
-$ exit
+docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it llm-vlm-dev
+$ ... # 컨테이너 내부 자동 진입
+```
+
+컨테이너 종료 및 제거:
+```bash
 docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ```
 
@@ -27,7 +34,7 @@ python3 run_vlm.py
 ```
 
 ## 실행 방법 (TODO: O3 compile)
-Docker 컨테이너 내에서:
+소스 코드는 이미 컨테이너에 포함되어 있습니다. Docker 컨테이너 내에서:
 ```bash
 # 문제 1: LLM 텍스트 생성
 cd problem1-llm
@@ -36,6 +43,7 @@ cd ..
 
 # 문제 2: Static graph export & 텍스트 생성 (TODO: compare to original)
 cd problem2-static
+# google/gemma-3-1b-it 모델 사용 허가를 받은 후 Hugging Face 토큰으로 로그인
 hf auth login
 ./run.sh
 cd ..
@@ -58,20 +66,9 @@ cd ..
 ## 코드 품질 관리
 Docker 컨테이너 내에서:
 ```bash
-# 수동으로 포맷팅 적용
-find . -name "*.cpp" -o -name "*.h" | xargs clang-format -i
-
-# 2. clang-tidy 실행 (각 프로젝트에서 -p 옵션으로 build 디렉토리 지정)
-cd problem1-llm && clang-tidy -p build main.cpp && cd ..
-cd problem2-static && clang-tidy -p build main.cpp && cd ..
-cd problem3-vlm && clang-tidy -p build main.cpp && cd ..
-```
-
-## 기타
-Docker 컨테이너 내에서:
-```bash
-# python package 업데이트 적용
-pip freeze > requirements.txt
+clang-format -i problem1-llm/main.cpp
+clang-format -i problem2-static/main.cpp
+clang-format -i problem3-vlm/main.cpp
 ```
 
 # TODO
@@ -80,6 +77,7 @@ pip freeze > requirements.txt
 * MAC에서 Docker 기반으로 모두 동작하도록 최적화 (혹은 AWS 리눅스 환경 가정 후 재현 가능성이라도 확보)
 * 1차 보고서 작성 (최적화 작업 전에 최소 제출을 위해)
   * 코드 품질 향상 후 이를 기반으로 보고서 작성
+    * 평가 기준 등 잘 살필 것
   * 개발 진행하면서 어떤게 힘들었는지
     * problem1: C++ 자체가 너무 오랜만
     * problem2: Static 그래프 뽑기 위해서 커스터마이즈가 필요했음, onnx runtime 출력에 대한 사전 할당 등이 생각대로 되지 않아 난감.
