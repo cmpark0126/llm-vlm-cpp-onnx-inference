@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import os
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers.cache_utils import DynamicCache
@@ -9,6 +10,9 @@ import numpy as np
 
 from export_onnx_prefill import StaticGemmaPrefill
 from export_onnx_decode import StaticGemmaDecode
+
+# Get cache length from environment variable, default to 1024
+CACHE_LENGTH = int(os.environ.get('CACHE_LENGTH', '1024'))
 
 
 def load_model():
@@ -317,8 +321,8 @@ def run_onnx_decode_loop(
         current_pos = next_position.item()
         cache_position = current_pos - 1
 
-        # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
-        attention_mask = torch.zeros(1, 1024, dtype=torch.long)
+        # CACHE_LENGTH 크기의 attention mask 생성 (현재 위치까지만 1)
+        attention_mask = torch.zeros(1, CACHE_LENGTH, dtype=torch.long)
         attention_mask[0, :current_pos] = 1  # 현재 위치까지만 유효
 
         # ONNX 입력 준비
@@ -335,9 +339,9 @@ def run_onnx_decode_loop(
             for layer_idx in range(len(past_key_values)):
                 key, value = past_key_values[layer_idx]
 
-                # 1024 크기로 패딩된 KV cache 생성
-                padded_key = torch.zeros(1, key.shape[1], 1024, key.shape[3], dtype=key.dtype)
-                padded_value = torch.zeros(1, value.shape[1], 1024, value.shape[3], dtype=value.dtype)
+                # CACHE_LENGTH 크기로 패딩된 KV cache 생성
+                padded_key = torch.zeros(1, key.shape[1], CACHE_LENGTH, key.shape[3], dtype=key.dtype)
+                padded_value = torch.zeros(1, value.shape[1], CACHE_LENGTH, value.shape[3], dtype=value.dtype)
 
                 # 기존 cache를 앞부분에 복사
                 seq_len = key.shape[2]
@@ -561,8 +565,8 @@ def run_pytorch_static_decode_loop(
         current_pos = next_position.item()
         cache_position = current_pos - 1
 
-        # 1024 크기의 attention mask 생성 (현재 위치까지만 1)
-        attention_mask = torch.zeros(1, 1024, dtype=torch.long)
+        # CACHE_LENGTH 크기의 attention mask 생성 (현재 위치까지만 1)
+        attention_mask = torch.zeros(1, CACHE_LENGTH, dtype=torch.long)
         attention_mask[0, :current_pos] = 1  # 현재 위치까지만 유효
 
         # 과거 KV cache를 1024 크기로 패딩
@@ -571,9 +575,9 @@ def run_pytorch_static_decode_loop(
             for layer_idx in range(len(past_key_values)):
                 key, value = past_key_values[layer_idx]
 
-                # 1024 크기로 패딩된 KV cache 생성
-                padded_key = torch.zeros(1, key.shape[1], 1024, key.shape[3], dtype=key.dtype)
-                padded_value = torch.zeros(1, value.shape[1], 1024, value.shape[3], dtype=value.dtype)
+                # CACHE_LENGTH 크기로 패딩된 KV cache 생성
+                padded_key = torch.zeros(1, key.shape[1], CACHE_LENGTH, key.shape[3], dtype=key.dtype)
+                padded_value = torch.zeros(1, value.shape[1], CACHE_LENGTH, value.shape[3], dtype=value.dtype)
 
                 # 기존 cache를 앞부분에 복사
                 seq_len = key.shape[2]
@@ -643,7 +647,7 @@ def execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decod
         next_token,
         past_key_values,
         next_position,
-        max_new_tokens=1024,
+        max_new_tokens=CACHE_LENGTH,
     )
 
 

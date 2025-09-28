@@ -3,8 +3,10 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
 
@@ -13,6 +15,12 @@ using json = nlohmann::json;
 // Constants
 const int PREFILL_SEQ_LEN = 128;
 const int DEFAULT_MAX_NEW_TOKENS = 1024;
+
+// Get whether to unload prefill model before decode from environment variable
+bool get_unload_prefill_before_decode() {
+    const char* unload_env = std::getenv("UNLOAD_PREFILL_BEFORE_DECODE");
+    return unload_env && (std::string(unload_env) == "true" || std::string(unload_env) == "1");
+}
 
 struct SimpleTokenizer {
     std::string tokenizer_path;
@@ -306,14 +314,16 @@ int main() {
     }
     std::cout << "]" << std::endl;
 
+    // Initialize ONNX Runtime environment
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "StaticGemmaInference");
+    Ort::SessionOptions session_options;
+
     // Initialize ONNX Runtime and load prefill model
     std::string prefill_model_path = "../gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx";
 
     std::cout << "Loading ONNX prefill model: " << prefill_model_path << std::endl;
 
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "StaticGemmaInference");
-    Ort::SessionOptions session_options;
-    Ort::Session prefill_session(env, prefill_model_path.c_str(), session_options);
+    std::unique_ptr<Ort::Session> prefill_session = std::make_unique<Ort::Session>(env, prefill_model_path.c_str(), session_options);
 
     std::cout << "ONNX prefill model loaded successfully" << std::endl;
 
@@ -341,12 +351,12 @@ int main() {
 
     // Get output names
     Ort::AllocatorWithDefaultOptions allocator;
-    size_t output_count = prefill_session.GetOutputCount();
+    size_t output_count = prefill_session->GetOutputCount();
     std::vector<const char*> output_names(output_count);
     std::vector<std::string> output_names_storage(output_count);
 
     for (size_t i = 0; i < output_count; ++i) {
-        auto output_name_allocated = prefill_session.GetOutputNameAllocated(i, allocator);
+        auto output_name_allocated = prefill_session->GetOutputNameAllocated(i, allocator);
         output_names_storage[i] = std::string(output_name_allocated.get());
         output_names[i] = output_names_storage[i].c_str();
     }
@@ -355,7 +365,7 @@ int main() {
 
     // Run inference
     auto outputs =
-        prefill_session.Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
+        prefill_session->Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
                             input_values.size(), output_names.data(), output_names.size());
 
     std::cout << "ONNX prefill inference completed" << std::endl;
@@ -397,14 +407,29 @@ int main() {
     std::cout << "Next token text: \"" << escape_special_chars(next_token_text) << "\""
               << std::endl;
 
+    // Check if we should unload prefill model before decode
+    bool unload_prefill = get_unload_prefill_before_decode();
+    if (unload_prefill) {
+        std::cout << "Unloading prefill model to save memory..." << std::endl;
+        // Explicitly reset the unique_ptr to free memory
+        // This safely destroys the session without double-deallocation
+        prefill_session.reset();
+        std::cout << "Prefill model unloaded" << std::endl;
+    }
+
     // Prepare for decode phase
     std::cout << "\n=== DECODE PHASE PREPARATION ===" << std::endl;
 
     // Initialize decode inputs
     int64_t current_token = next_token_id;
     int64_t current_position = original_seq_len + 1;  // next position after prefill
-    const int MAX_SEQ_LEN = 1024;
 
+    // Get cache length from environment variable, default to 1024
+    const char* cache_length_env = std::getenv("CACHE_LENGTH");
+    const int MAX_SEQ_LEN = cache_length_env ? std::atoi(cache_length_env) : 1024;
+
+    std::cout << "Cache length (MAX_SEQ_LEN): " << MAX_SEQ_LEN
+              << (cache_length_env ? " (from CACHE_LENGTH env var)" : " (default)") << std::endl;
     std::cout << "Current token: " << current_token << std::endl;
     std::cout << "Current position: " << current_position << std::endl;
 

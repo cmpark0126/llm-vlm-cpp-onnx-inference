@@ -5,6 +5,9 @@ import torch.nn as nn
 from typing import Optional, Tuple, Any
 from transformers import AutoModelForCausalLM
 
+# Constants
+DEFAULT_CACHE_LENGTH = int(os.environ.get('CACHE_LENGTH', '1024'))
+
 
 @torch.jit.script
 def update_cache(existing_key_cache: torch.Tensor, existing_value_cache: torch.Tensor,
@@ -58,13 +61,13 @@ class TempCache:
 class StaticGemmaDecode(nn.Module):
     """
     Gemma3 Decode stage with static shapes for ONNX export
-    Fixed cache length: 1024, input sequence length: 1
+    Cache length configurable via CACHE_LENGTH env var (default: 1024), input sequence length: 1
     """
 
     def __init__(self, original_model, config):
         super().__init__()
         self.config = config
-        self.cache_length = 1024
+        self.cache_length = DEFAULT_CACHE_LENGTH
         self.input_seq_length = 1
 
         # Copy layers from original model
@@ -254,6 +257,8 @@ def export_static_gemma_decode_to_onnx(
     static_model = StaticGemmaDecode(original_model, config)
     static_model.eval()
 
+    cache_length = DEFAULT_CACHE_LENGTH
+
     num_layers = config.num_hidden_layers
     num_key_value_heads = getattr(
         config, "num_key_value_heads", config.num_attention_heads
@@ -267,13 +272,13 @@ def export_static_gemma_decode_to_onnx(
     )
     dummy_position_ids = torch.tensor([[0]], dtype=torch.long)  # Start at position 0
     dummy_cache_position = torch.tensor([0], dtype=torch.long)  # Target cache position
-    dummy_attention_mask = torch.ones((batch_size, 1024), dtype=torch.long)  # All positions valid for testing
+    dummy_attention_mask = torch.ones((batch_size, cache_length), dtype=torch.long)  # All positions valid for testing
 
     # Create dummy past KV caches (initialized with zeros)
     dummy_past_kv = []
     for layer_idx in range(num_layers):
-        dummy_key = torch.zeros((batch_size, num_key_value_heads, 1024, head_dim), dtype=torch.float32)
-        dummy_value = torch.zeros((batch_size, num_key_value_heads, 1024, head_dim), dtype=torch.float32)
+        dummy_key = torch.zeros((batch_size, num_key_value_heads, cache_length, head_dim), dtype=torch.float32)
+        dummy_value = torch.zeros((batch_size, num_key_value_heads, cache_length, head_dim), dtype=torch.float32)
         dummy_past_kv.extend([dummy_key, dummy_value])
 
     # Create input names for KV caches
@@ -290,15 +295,15 @@ def export_static_gemma_decode_to_onnx(
     print(f"Exporting with {len(input_names)} inputs:")
     print(f"  - input_ids: [1, 1]")
     print(f"  - position_ids: [1, 1]")
-    print(f"  - attention_mask: [1, 1024]")
+    print(f"  - attention_mask: [1, {cache_length}]")
     print(f"  - cache_position: [1]")
     for layer_idx in range(num_layers):
-        print(f"  - past.{layer_idx}.key, past.{layer_idx}.value: [1, {num_key_value_heads}, 1024, {head_dim}]")
+        print(f"  - past.{layer_idx}.key, past.{layer_idx}.value: [1, {num_key_value_heads}, {cache_length}, {head_dim}]")
 
     print(f"Exporting with {len(output_names)} outputs:")
     print(f"  - logits: [1, 1, {config.vocab_size}]")
     for layer_idx in range(num_layers):
-        print(f"  - present.{layer_idx}.key, present.{layer_idx}.value: [1, {num_key_value_heads}, 1024, {head_dim}]")
+        print(f"  - present.{layer_idx}.key, present.{layer_idx}.value: [1, {num_key_value_heads}, {cache_length}, {head_dim}]")
 
     # Prepare arguments for export
     export_args = (dummy_input_ids, dummy_position_ids, dummy_attention_mask, dummy_cache_position) + tuple(dummy_past_kv)
