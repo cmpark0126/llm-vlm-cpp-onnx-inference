@@ -17,6 +17,7 @@ using json = nlohmann::json;
 const int DEFAULT_BATCH_SIZE = 1;
 const int DEFAULT_MAX_NEW_TOKENS = 128;
 const int DEFAULT_EOS_TOKEN_ID = 106;  // <end_of_turn>
+const bool USE_STREAMING_OUTPUT = true;
 
 Ort::Value create_input_ids_tensor(const std::vector<int64_t>& input_ids,
                                    const Ort::MemoryInfo& memory_info) {
@@ -215,19 +216,21 @@ int main() {
             first_token_generated = true;
         }
 
-        // Streaming output (decode single token)
-        std::string token_text = tokenizer.decode(next_token_id);
-
-        // Filter out special tokens from streaming output
-        if (token_text.find("<") == std::string::npos &&
-            token_text.find(">") == std::string::npos) {
-            std::cout << token_text << std::flush;
-        }
-
         // Check for EOS token
         if (next_token_id == DEFAULT_EOS_TOKEN_ID) {
             std::cout << std::endl;
             break;
+        }
+
+        // Streaming output (decode single token)
+        if (USE_STREAMING_OUTPUT) {
+            std::string token_text = tokenizer.decode(next_token_id);
+
+            // Filter out special tokens from streaming output
+            if (token_text.find("<") == std::string::npos &&
+                token_text.find(">") == std::string::npos) {
+                std::cout << token_text << std::flush;
+            }
         }
 
         // Update state for next iteration
@@ -244,6 +247,13 @@ int main() {
             current_past_kv_tensors.push_back(std::move(outputs[j]));
         }
     }
+
+    // 4. Print generated tokens
+    std::cout << "\n=== Generated Tokens ===" << std::endl;
+    for (int token : generated_tokens) {
+        std::cout << tokenizer.decode(token) << std::flush;
+    }
+    std::cout << std::endl;
 
     // 4. Performance measurements
     int64_t generation_end_ms = get_time_ms();
