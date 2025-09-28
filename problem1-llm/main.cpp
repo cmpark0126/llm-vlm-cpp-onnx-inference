@@ -137,9 +137,15 @@ int main() {
         output_names[i] = output_names_storage[i].c_str();
     }
 
-    // 2. Prepare inputs
     LlmTokenizer tokenizer(path_to_tokenizer);
 
+    // Generation loop with performance measurements
+    std::vector<int64_t> generated_tokens;
+    int64_t generation_start_ms = get_time_ms();
+    int64_t first_token_time_ms = 0;
+    bool first_token_generated = false;
+
+    // 2. Prepare inputs
     std::string prompt =
         "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about "
         "Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
@@ -156,12 +162,6 @@ int main() {
     // Prefill past_kv_tensors, all tensors are empty
     std::vector<Ort::Value> current_past_kv_tensors = create_prefill_past_kv_tensors(
         num_hidden_layers, num_key_value_heads, head_dim, memory_info);
-
-    // Generation loop with performance measurements
-    std::vector<int64_t> generated_tokens;
-    int64_t generation_start_ms = get_time_ms();
-    int64_t first_token_time_ms = 0;
-    bool first_token_generated = false;
 
     // 3. Generation loop
     for (int i = 0; i < DEFAULT_MAX_NEW_TOKENS; i++) {

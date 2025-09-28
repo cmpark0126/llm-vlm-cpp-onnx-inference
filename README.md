@@ -29,6 +29,8 @@ Docker 컨테이너 내에서:
 git clone https://huggingface.co/geonmin-kim/llm_vlm_onnx_sample
 cd llm_vlm_onnx_sample
 git lfs pull
+cd ../baselines
+# 성능 측정, prompt 수정이 포함된 baseline
 python3 run_llm.py
 python3 run_vlm.py
 ```
