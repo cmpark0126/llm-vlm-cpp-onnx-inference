@@ -43,6 +43,7 @@ cd ..
 
 # 문제 2: Static graph export & 텍스트 생성 (TODO: compare to original)
 cd problem2-static
+# google/gemma-3-1b-it 모델 사용 허가를 받은 후 Hugging Face 토큰으로 로그인
 hf auth login
 ./run.sh
 cd ..
