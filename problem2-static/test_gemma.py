@@ -648,35 +648,45 @@ def execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decod
 
 
 if __name__ == "__main__":
-    tokenizer, model = load_model()
+    import argparse
 
+    parser = argparse.ArgumentParser(description="Run Gemma model inference")
+    parser.add_argument("--mode", choices=["original", "split", "custom_static_model", "onnx_static_model"],
+                       required=True,
+                       help="Inference mode: "
+                            "original (HuggingFace transformers), "
+                            "split (HuggingFace transformers with prefill/decode separation), "
+                            "custom_static_model (PyTorch static models), "
+                            "onnx_static_model (ONNX static models)")
+    args = parser.parse_args()
+
+    tokenizer, model = load_model()
     inputs = prepare_inputs(tokenizer, model)
 
-    # ONNX 모델 로드
-    onnx_prefill_path = "./gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx"
-    onnx_prefill_session = load_onnx_model(onnx_prefill_path)
+    if args.mode == "original":
+        print("=== ORIGINAL MODEL ===")
+        print("HuggingFace transformers 기본 모델로 텍스트 생성")
+        execute_original_model(tokenizer, model, inputs)
 
-    onnx_decode_path = "./gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx"
-    onnx_decode_session = load_onnx_model(onnx_decode_path)
+    elif args.mode == "split":
+        print("=== PYTORCH SPLIT MODEL ===")
+        print("HuggingFace transformers 모델을 prefill/decode 단계로 분리하여 실행")
+        execute_split_model(tokenizer, model, inputs)
 
-    # # 기존 방식 실행
-    # execute_original_model(tokenizer, model, inputs)
-    # print()
+    elif args.mode == "custom_static_model":
+        print("=== PYTORCH STATIC SPLIT MODEL ===")
+        print("PyTorch static 모델로 고정 크기 입력을 사용한 prefill/decode 실행")
+        execute_pytorch_static_split_model(tokenizer, model, inputs)
 
-    print("-" * 100)
+    elif args.mode == "onnx_static_model":
+        print("=== ONNX STATIC SPLIT MODEL ===")
+        print("ONNX 변환된 static 모델로 prefill/decode 실행")
+        onnx_prefill_path = "./gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx"
+        onnx_prefill_session = load_onnx_model(onnx_prefill_path)
 
-    # # PyTorch 분리된 방식 실행
-    # execute_split_model(tokenizer, model, inputs)
-    # print()
+        onnx_decode_path = "./gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx"
+        onnx_decode_session = load_onnx_model(onnx_decode_path)
 
-    print("-" * 100)
+        execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
 
-    # PyTorch Static 분리된 방식 실행
-    execute_pytorch_static_split_model(tokenizer, model, inputs)
-    print()
-
-    print("-" * 100)
-
-    # ONNX 분리된 방식 실행
-    execute_onnx_split_model(tokenizer, inputs, onnx_prefill_session, onnx_decode_session)
     print()
