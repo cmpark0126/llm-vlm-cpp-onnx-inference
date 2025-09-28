@@ -73,7 +73,9 @@
 - TODO: 베이스라인 대비 성능 비교
 
 **향후 계획:**
-- f16을 f32로 변환하는 과정을 피하기 위해서 ONNX 모델을 수정하거나, 더 빠르게 변환하는 방법을 찾을 수 있을 것인지?
+- 모든 모델들이 f16을 사용하도록 양자화 하는 방법 고려
+- text embedding 모델이 f32를 사용하도록 변경하는 방법 고려
+- text embedding, image embedding 합칠 때, 더 효율적으로 진행하는 방법 고려
 
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)

@@ -21,8 +21,16 @@ using json = nlohmann::json;
 
 // Constants
 const int64_t IMAGE_TOKEN_INDEX = 151646;
+const int64_t EOS_TOKEN_ID = 151645;
 const int MAX_GEN_LEN = 128;
 const bool USE_SAMPLING = false;  // true for top-p sampling, false for argmax
+
+// VLM model constants
+const int IMAGE_FEATURES_COUNT = 197;  // Number of image features from vision encoder
+const int HIDDEN_SIZE = 896;           // Hidden dimension size
+const int NUM_KV_HEADS = 2;            // Number of key-value heads
+const int HEAD_DIM = 64;               // Head dimension
+const int NUM_LAYERS = 24;             // Number of transformer layers
 
 // Float16 to float32 conversion function
 float uint16_to_float32(uint16_t h) {
@@ -231,9 +239,9 @@ std::vector<float> run_text_embedding(Ort::Session& text_emb_session,
     // Get text embedding
     std::vector<int64_t> input_ids_shape = {1, static_cast<int64_t>(input_ids.size())};
 
-    auto text_input_tensor =
-        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(input_ids.data()), input_ids.size(),
-                                          input_ids_shape.data(), input_ids_shape.size());
+    auto text_input_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, const_cast<int64_t*>(input_ids.data()), input_ids.size(),
+        input_ids_shape.data(), input_ids_shape.size());
 
     // Get input/output names
     auto input_name_allocated = text_emb_session.GetInputNameAllocated(0, allocator);
@@ -298,7 +306,7 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
         Ort::RunOptions{nullptr}, image_input_names.data(), image_input_values.data(),
         image_input_values.size(), image_output_names.data(), image_output_names.size());
 
-    // Get output shape [1, 197, 896]
+    // Get output shape [1, IMAGE_FEATURES_COUNT, HIDDEN_SIZE]
     auto image_shape_out = image_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
 
     size_t total_elements = 1;
@@ -313,16 +321,13 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
     return image_features_proj;
 }
 
-// Prefill function
-std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session,
-                                                    const std::vector<float>& hidden_states_float32,
-                                                    int input_token_len,
-                                                    Ort::MemoryInfo& memory_info,
-                                                    Ort::AllocatorWithDefaultOptions& allocator,
-                                                    const VlmTokenizer& tokenizer) {
-    auto decoder_start = std::chrono::high_resolution_clock::now();
-
-    // Get input/output names from decoder session (like text embedding)
+// Unified inference function for both prefill and decode
+std::pair<int, std::vector<Ort::Value>> run_inference(
+    Ort::Session& decoding_session, const std::vector<float>& hidden_states_float32,
+    int sequence_length, std::vector<Ort::Value>* past_kv_values, int current_position,
+    Ort::MemoryInfo& memory_info, Ort::AllocatorWithDefaultOptions& allocator,
+    const VlmTokenizer& tokenizer) {
+    // Get input/output names from decoder session
     size_t decoder_input_count = decoding_session.GetInputCount();
     size_t decoder_output_count = decoding_session.GetOutputCount();
 
@@ -341,66 +346,53 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
         decoder_output_names.push_back(decoder_output_name_ptrs.back().get());
     }
 
-    // Prepare input tensors in the order expected by the model
+    // Prepare input tensors
     std::vector<Ort::Value> decoder_input_values;
 
-    // Based on the expected order, create tensors
-    // 1. attention_mask: int64[1, 28]
-    std::vector<int64_t> attention_mask(input_token_len, 1);
-    std::vector<int64_t> attention_mask_shape = {1, input_token_len};
+    // 1. attention_mask
+    std::vector<int64_t> attention_mask(sequence_length, 1);
+    std::vector<int64_t> attention_mask_shape = {1, sequence_length};
+
     auto attention_mask_tensor =
         Ort::Value::CreateTensor<int64_t>(memory_info, attention_mask.data(), attention_mask.size(),
                                           attention_mask_shape.data(), attention_mask_shape.size());
     decoder_input_values.push_back(std::move(attention_mask_tensor));
 
-    // 2. position_ids: int64[1, 28]
-    std::vector<int64_t> position_ids(input_token_len);
-    std::iota(position_ids.begin(), position_ids.end(), 0);
-    std::vector<int64_t> position_ids_shape = {1, input_token_len};
+    // 2. position_ids
+    std::vector<int64_t> position_ids(sequence_length);
+    std::vector<int64_t> position_ids_shape = {1, sequence_length};
+    std::iota(position_ids.begin(), position_ids.end(), current_position);
+
     auto position_ids_tensor =
         Ort::Value::CreateTensor<int64_t>(memory_info, position_ids.data(), position_ids.size(),
                                           position_ids_shape.data(), position_ids_shape.size());
     decoder_input_values.push_back(std::move(position_ids_tensor));
 
-    // 3. past_key_values.{0-23}.{key,value}: float32[1, 2, 0, 64] (48개)
-    std::vector<float> empty_kv_data;  // Empty vector for [1, 2, 0, 64]
-    std::vector<int64_t> empty_kv_shape = {1, 2, 0, 64};
-
-    for (int i = 0; i < 24; i++) {
-        // past_key_values.{i}.key
-        auto past_key_tensor =
-            Ort::Value::CreateTensor<float>(memory_info, empty_kv_data.data(), empty_kv_data.size(),
-                                            empty_kv_shape.data(), empty_kv_shape.size());
-        decoder_input_values.push_back(std::move(past_key_tensor));
-
-        // past_key_values.{i}.value
-        auto past_value_tensor =
-            Ort::Value::CreateTensor<float>(memory_info, empty_kv_data.data(), empty_kv_data.size(),
-                                            empty_kv_shape.data(), empty_kv_shape.size());
-        decoder_input_values.push_back(std::move(past_value_tensor));
+    // 3. past_key_values
+    // Move provided past_key_values directly (empty for prefill, populated for decode)
+    for (size_t i = 0; i < past_kv_values->size(); i++) {
+        decoder_input_values.push_back(std::move((*past_kv_values)[i]));
     }
 
-    // 4. /model/embed_tokens/Gather_output_0: float32[1, 28, 896]
-    std::vector<int64_t> hidden_states_shape = {1, input_token_len, 896};
+    // 4. hidden_states
+    std::vector<int64_t> hidden_states_shape = {1, sequence_length, HIDDEN_SIZE};
+
     auto hidden_states_tensor = Ort::Value::CreateTensor<float>(
         memory_info, const_cast<float*>(hidden_states_float32.data()), hidden_states_float32.size(),
         hidden_states_shape.data(), hidden_states_shape.size());
     decoder_input_values.push_back(std::move(hidden_states_tensor));
 
-    // Run prefill inference
-    auto prefill_outputs = decoding_session.Run(
-        Ort::RunOptions{nullptr}, decoder_input_names.data(), decoder_input_values.data(),
-        decoder_input_values.size(), decoder_output_names.data(), decoder_output_count);
+    // Run inference
+    auto outputs = decoding_session.Run(Ort::RunOptions{nullptr}, decoder_input_names.data(),
+                                        decoder_input_values.data(), decoder_input_values.size(),
+                                        decoder_output_names.data(), decoder_output_count);
 
-    auto decoder_end = std::chrono::high_resolution_clock::now();
-    auto decoder_duration = std::chrono::duration<double>(decoder_end - decoder_start).count();
-
-    // Get logits and find next token using argmax
-    auto logits_shape = prefill_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    const float* logits_data = prefill_outputs[0].GetTensorData<float>();
+    // Process logits and get next token
+    auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+    const float* logits_data = outputs[0].GetTensorData<float>();
+    int vocab_size = logits_shape[2];
 
     // Get last token logits for next token prediction
-    int vocab_size = logits_shape[2];
     int last_token_offset = (logits_shape[1] - 1) * vocab_size;
     const float* last_token_logits = logits_data + last_token_offset;
 
@@ -409,7 +401,7 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
     if (USE_SAMPLING) {
         next_token = top_p_sampling(last_token_logits, vocab_size);
     } else {
-        // Find argmax (next token)
+        // Find argmax
         next_token = 0;
         float max_logit = last_token_logits[0];
         for (int i = 1; i < vocab_size; i++) {
@@ -420,16 +412,47 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
         }
     }
 
-    // Return past_kv_values (outputs[1:]) for decode step
-    std::vector<Ort::Value> past_kv_values;
-    for (size_t i = 1; i < prefill_outputs.size(); i++) {
-        past_kv_values.push_back(std::move(prefill_outputs[i]));
+    // Return updated past_kv_values (outputs[1:])
+    std::vector<Ort::Value> new_past_kv_values;
+    for (size_t i = 1; i < outputs.size(); i++) {
+        new_past_kv_values.push_back(std::move(outputs[i]));
     }
 
-    return std::make_pair(next_token, std::move(past_kv_values));
+    return std::make_pair(next_token, std::move(new_past_kv_values));
 }
 
-// Decode function with performance measurement
+// Prefill function (wrapper for unified inference)
+std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_session,
+                                                    const std::vector<float>& hidden_states_float32,
+                                                    int input_token_len,
+                                                    Ort::MemoryInfo& memory_info,
+                                                    Ort::AllocatorWithDefaultOptions& allocator,
+                                                    const VlmTokenizer& tokenizer) {
+    // Create empty KV cache tensors for prefill
+    std::vector<Ort::Value> empty_past_kv_values;
+    std::vector<float> empty_kv_data;  // Empty vector for [1, NUM_KV_HEADS, 0, HEAD_DIM]
+    std::vector<int64_t> empty_kv_shape = {1, NUM_KV_HEADS, 0, HEAD_DIM};
+
+    for (int i = 0; i < NUM_LAYERS; i++) {
+        // past_key_values.{i}.key
+        auto past_key_tensor =
+            Ort::Value::CreateTensor<float>(memory_info, empty_kv_data.data(), empty_kv_data.size(),
+                                            empty_kv_shape.data(), empty_kv_shape.size());
+        empty_past_kv_values.push_back(std::move(past_key_tensor));
+
+        // past_key_values.{i}.value
+        auto past_value_tensor =
+            Ort::Value::CreateTensor<float>(memory_info, empty_kv_data.data(), empty_kv_data.size(),
+                                            empty_kv_shape.data(), empty_kv_shape.size());
+        empty_past_kv_values.push_back(std::move(past_value_tensor));
+    }
+
+    // Create empty KV cache tensors for prefill
+    return run_inference(decoding_session, hidden_states_float32, input_token_len,
+                         &empty_past_kv_values, 0, memory_info, allocator, tokenizer);
+}
+
+// Decode function (wrapper for unified inference)
 std::vector<int64_t> run_decode(Ort::Session& text_emb_session, Ort::Session& decoding_session,
                                 std::vector<Ort::Value> past_kv_values, int first_token,
                                 int input_token_len, Ort::MemoryInfo& memory_info,
@@ -446,108 +469,16 @@ std::vector<int64_t> run_decode(Ort::Session& text_emb_session, Ort::Session& de
         auto next_hidden_states =
             run_text_embedding(text_emb_session, {next_token}, memory_info, allocator);
 
-        // Prepare decode inputs
-        std::vector<Ort::Value> decode_input_values;
+        // Use unified inference function for decode
+        auto result = run_inference(decoding_session, next_hidden_states, 1, &past_kv_values,
+                                    current_token_len, memory_info, allocator, tokenizer);
 
-        // 1. attention_mask: [1, 1]
-        std::vector<int64_t> attention_mask = {1};
-        std::vector<int64_t> attention_mask_shape = {1, 1};
-        auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
-            memory_info, attention_mask.data(), attention_mask.size(), attention_mask_shape.data(),
-            attention_mask_shape.size());
-        decode_input_values.push_back(std::move(attention_mask_tensor));
+        next_token = result.first;
+        past_kv_values = std::move(result.second);
+        current_token_len++;
 
-        // 2. position_ids: [1, 1] with current position
-        std::vector<int64_t> position_ids = {current_token_len};
-        std::vector<int64_t> position_ids_shape = {1, 1};
-        auto position_ids_tensor =
-            Ort::Value::CreateTensor<int64_t>(memory_info, position_ids.data(), position_ids.size(),
-                                              position_ids_shape.data(), position_ids_shape.size());
-        decode_input_values.push_back(std::move(position_ids_tensor));
-
-        current_token_len++;  // Increment after setting position_ids
-
-        // 3. past_key_values from previous step
-        // Store kv_data vectors to ensure memory lifetime
-        std::vector<std::vector<float>> kv_data_storage;
-        kv_data_storage.reserve(past_kv_values.size());
-
-        for (size_t i = 0; i < past_kv_values.size(); i++) {
-            auto shape = past_kv_values[i].GetTensorTypeAndShapeInfo().GetShape();
-            const float* data = past_kv_values[i].GetTensorData<float>();
-            size_t element_count = 1;
-            for (auto dim : shape) element_count *= dim;
-
-            // Store data in persistent vector
-            kv_data_storage.emplace_back(data, data + element_count);
-
-            auto kv_tensor = Ort::Value::CreateTensor<float>(
-                memory_info, kv_data_storage.back().data(), kv_data_storage.back().size(),
-                shape.data(), shape.size());
-            decode_input_values.push_back(std::move(kv_tensor));
-        }
-
-        // 4. hidden_states: [1, 1, 896]
-        std::vector<int64_t> hidden_states_shape = {1, 1, 896};
-        auto hidden_states_tensor = Ort::Value::CreateTensor<float>(
-            memory_info, const_cast<float*>(next_hidden_states.data()), next_hidden_states.size(),
-            hidden_states_shape.data(), hidden_states_shape.size());
-        decode_input_values.push_back(std::move(hidden_states_tensor));
-
-        // Get input/output names
-        size_t decoder_input_count = decoding_session.GetInputCount();
-        size_t decoder_output_count = decoding_session.GetOutputCount();
-
-        std::vector<Ort::AllocatedStringPtr> decoder_input_name_ptrs;
-        std::vector<Ort::AllocatedStringPtr> decoder_output_name_ptrs;
-        std::vector<const char*> decoder_input_names;
-        std::vector<const char*> decoder_output_names;
-
-        for (size_t i = 0; i < decoder_input_count; i++) {
-            decoder_input_name_ptrs.push_back(decoding_session.GetInputNameAllocated(i, allocator));
-            decoder_input_names.push_back(decoder_input_name_ptrs.back().get());
-        }
-
-        for (size_t i = 0; i < decoder_output_count; i++) {
-            decoder_output_name_ptrs.push_back(
-                decoding_session.GetOutputNameAllocated(i, allocator));
-            decoder_output_names.push_back(decoder_output_name_ptrs.back().get());
-        }
-
-        // Run decode inference
-        auto decode_outputs = decoding_session.Run(
-            Ort::RunOptions{nullptr}, decoder_input_names.data(), decode_input_values.data(),
-            decode_input_values.size(), decoder_output_names.data(), decoder_output_count);
-
-        // Update past_kv_values for next iteration
-        past_kv_values.clear();
-        for (size_t i = 1; i < decode_outputs.size(); i++) {
-            past_kv_values.push_back(std::move(decode_outputs[i]));
-        }
-
-        // Get next token
-        auto logits_shape = decode_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-        const float* logits_data = decode_outputs[0].GetTensorData<float>();
-        int vocab_size = logits_shape[2];
-        const float* last_token_logits = logits_data;
-
-        // Get next token using sampling or argmax
-        if (USE_SAMPLING) {
-            next_token = top_p_sampling(last_token_logits, vocab_size);
-        } else {
-            // Find argmax
-            next_token = 0;
-            float max_logit = last_token_logits[0];
-            for (int i = 1; i < vocab_size; i++) {
-                if (last_token_logits[i] > max_logit) {
-                    max_logit = last_token_logits[i];
-                    next_token = i;
-                }
-            }
-        }
-
-        // Check for EOS token (assuming EOS token ID is 151645 based on common patterns)
-        if (next_token == 151645) {
+        // Check for EOS token
+        if (next_token == EOS_TOKEN_ID) {
             break;
         }
 
@@ -647,19 +578,17 @@ int main() {
     std::vector<float> pre_image_text_emb;
     std::vector<float> post_image_text_emb;
 
-    int embed_dim = 896;
-
     // Pre-image text embedding: [:image_token_pos, :]
     for (int i = 0; i < image_token_pos; i++) {
-        for (int j = 0; j < embed_dim; j++) {
-            pre_image_text_emb.push_back(text_embeddings[i * embed_dim + j]);
+        for (int j = 0; j < HIDDEN_SIZE; j++) {
+            pre_image_text_emb.push_back(text_embeddings[i * HIDDEN_SIZE + j]);
         }
     }
 
     // Post-image text embedding: [image_token_pos + 1:, :]
     for (int i = image_token_pos + 1; i < input_ids.size(); i++) {
-        for (int j = 0; j < embed_dim; j++) {
-            post_image_text_emb.push_back(text_embeddings[i * embed_dim + j]);
+        for (int j = 0; j < HIDDEN_SIZE; j++) {
+            post_image_text_emb.push_back(text_embeddings[i * HIDDEN_SIZE + j]);
         }
     }
 
@@ -677,10 +606,11 @@ int main() {
                                  post_image_text_emb.end());
 
     // Calculate new token length
-    int input_token_len = image_token_pos + 197 + (input_ids.size() - image_token_pos - 1);
+    int input_token_len =
+        image_token_pos + IMAGE_FEATURES_COUNT + (input_ids.size() - image_token_pos - 1);
 
     // Print merged embedding results
-    std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), 896};
+    std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), HIDDEN_SIZE};
 
     // 5. Prefill Step
     auto prefill_result = run_prefill(decoding_session, hidden_states_float32, input_token_len,
@@ -705,8 +635,7 @@ int main() {
     double decode_time_ms = generation_end_ms - decode_start_ms;
 
     // Calculate TPOT (Time-Per-Output-Token) - decode time per generated token
-    double tpot_ms =
-        generated_tokens.size() > 1 ? decode_time_ms / (generated_tokens.size() - 1) : 0.0;
+    double tpot_ms = decode_time_ms / (generated_tokens.size() - 1);
 
     // Get peak memory usage
     size_t peak_memory = get_peak_memory_usage();
