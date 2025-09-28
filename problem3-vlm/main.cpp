@@ -321,6 +321,42 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
     return image_features_proj;
 }
 
+// Merge text and image embeddings around image token
+std::vector<float> merge_text_image_embeddings(const std::vector<float>& text_embeddings,
+                                               const std::vector<float>& image_features,
+                                               int image_token_pos, int total_text_tokens) {
+    std::vector<float> pre_image_text_emb;
+    std::vector<float> post_image_text_emb;
+
+    // Pre-image text embedding: [:image_token_pos, :]
+    for (int i = 0; i < image_token_pos; i++) {
+        for (int j = 0; j < HIDDEN_SIZE; j++) {
+            pre_image_text_emb.push_back(text_embeddings[i * HIDDEN_SIZE + j]);
+        }
+    }
+
+    // Post-image text embedding: [image_token_pos + 1:, :]
+    for (int i = image_token_pos + 1; i < total_text_tokens; i++) {
+        for (int j = 0; j < HIDDEN_SIZE; j++) {
+            post_image_text_emb.push_back(text_embeddings[i * HIDDEN_SIZE + j]);
+        }
+    }
+
+    // Merge text embedding and image embedding
+    std::vector<float> merged_embeddings;
+    merged_embeddings.reserve(pre_image_text_emb.size() + image_features.size() +
+                              post_image_text_emb.size());
+
+    // Concatenate: pre_image + image_features + post_image
+    merged_embeddings.insert(merged_embeddings.end(), pre_image_text_emb.begin(),
+                             pre_image_text_emb.end());
+    merged_embeddings.insert(merged_embeddings.end(), image_features.begin(), image_features.end());
+    merged_embeddings.insert(merged_embeddings.end(), post_image_text_emb.begin(),
+                             post_image_text_emb.end());
+
+    return merged_embeddings;
+}
+
 // Unified inference function for both prefill and decode
 std::pair<int, std::vector<Ort::Value>> run_language_model(
     Ort::Session& language_model_session, const std::vector<float>& hidden_states_float32,
@@ -578,43 +614,13 @@ int main() {
     // Get text embedding
     auto text_embeddings = run_text_embedding(text_emb_session, input_ids, memory_info, allocator);
 
-    // Split text embedding around image token
-    std::vector<float> pre_image_text_emb;
-    std::vector<float> post_image_text_emb;
-
-    // Pre-image text embedding: [:image_token_pos, :]
-    for (int i = 0; i < image_token_pos; i++) {
-        for (int j = 0; j < HIDDEN_SIZE; j++) {
-            pre_image_text_emb.push_back(text_embeddings[i * HIDDEN_SIZE + j]);
-        }
-    }
-
-    // Post-image text embedding: [image_token_pos + 1:, :]
-    for (int i = image_token_pos + 1; i < input_ids.size(); i++) {
-        for (int j = 0; j < HIDDEN_SIZE; j++) {
-            post_image_text_emb.push_back(text_embeddings[i * HIDDEN_SIZE + j]);
-        }
-    }
-
-    // Merge text embedding and image embedding
-    std::vector<float> hidden_states_float32;
-    hidden_states_float32.reserve(pre_image_text_emb.size() + image_features_proj.size() +
-                                  post_image_text_emb.size());
-
-    // Concatenate: pre_image + image_features + post_image
-    hidden_states_float32.insert(hidden_states_float32.end(), pre_image_text_emb.begin(),
-                                 pre_image_text_emb.end());
-    hidden_states_float32.insert(hidden_states_float32.end(), image_features_proj.begin(),
-                                 image_features_proj.end());
-    hidden_states_float32.insert(hidden_states_float32.end(), post_image_text_emb.begin(),
-                                 post_image_text_emb.end());
+    // Merge text and image embeddings around image token
+    auto hidden_states_float32 = merge_text_image_embeddings(text_embeddings, image_features_proj,
+                                                             image_token_pos, input_ids.size());
 
     // Calculate new token length
     // Original tokens - 1 (image token) + IMAGE_FEATURES_COUNT (image features)
     int input_token_len = input_ids.size() - 1 + IMAGE_FEATURES_COUNT;
-
-    // Print merged embedding results
-    std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), HIDDEN_SIZE};
 
     // 5. Prefill Step
     auto prefill_result = run_prefill(language_model_session, hidden_states_float32,
