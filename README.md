@@ -6,9 +6,6 @@ Local 환경에서:
 docker build -t llm-vlm-dev .
 docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -d llm-vlm-dev sleep infinity
 docker exec -it llm-vlm-dev /bin/bash
-$ chmod +x install_onnxruntime.sh
-$ ./install_onnxruntime.sh
-$ . .venv/bin/activate
 $ ...
 $ exit
 docker stop llm-vlm-dev && docker rm llm-vlm-dev

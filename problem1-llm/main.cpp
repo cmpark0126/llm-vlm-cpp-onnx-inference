@@ -42,7 +42,6 @@ struct SimpleTokenizer {
                 id_to_token[value] = key;
             }
         }
-
     }
 
     std::string preprocess(const std::string& text) {
@@ -373,7 +372,6 @@ int main() {
     int num_hidden_layers = config_json["num_hidden_layers"];
     int eos_token_id = DEFAULT_EOS_TOKEN_ID;
 
-
     // 2. Prepare inputs
     SimpleTokenizer tokenizer(path_to_tokenizer);
 
@@ -387,11 +385,9 @@ int main() {
     // Apply tokenizer
     auto input_ids = tokenizer.encode(preprocessed_prompt);
 
-
     // Prepare decoder inputs
     int batch_size = DEFAULT_BATCH_SIZE;
     int seq_len = input_ids.size();
-
 
     // Initialize ONNX Runtime
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
@@ -427,7 +423,6 @@ int main() {
     std::string model_path = path_to_model + "/q4f16.onnx";
     Ort::SessionOptions session_options;
     Ort::Session decoder_session(env, model_path.c_str(), session_options);
-
 
     // Get all output names dynamically from the model
     Ort::AllocatorWithDefaultOptions allocator;
@@ -496,7 +491,6 @@ int main() {
                                            current_input_values.data(), current_input_values.size(),
                                            output_names.data(), output_names.size());
 
-
         // Get logits and find argmax (next token)
         const float* logits_data = outputs[0].GetTensorData<float>();
         auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
@@ -519,7 +513,6 @@ int main() {
                 next_token_id = j;
             }
         }
-
 
         // Add to generated tokens
         generated_tokens.push_back(next_token_id);
@@ -572,7 +565,6 @@ int main() {
             current_past_kv_tensors = create_past_kv_tensors(
                 num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
         }
-
     }
 
     // Final batch decode (like Python's tokenizer.batch_decode)

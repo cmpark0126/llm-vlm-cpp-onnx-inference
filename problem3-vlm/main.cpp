@@ -144,10 +144,8 @@ std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
     // Convert to vector
     std::vector<float> image_features_proj(image_data, image_data + total_elements);
 
-
     return image_features_proj;
 }
-
 
 // Top-P Sampling Function (similar to run_vlm.py lines 93-107)
 int top_p_sampling(const float* logits, int vocab_size, float top_p = 0.99f) {
@@ -283,7 +281,6 @@ std::vector<float> process_image(const std::string& image_path) {
 
     // Resize image (maintain aspect ratio, scale shortest edge to 224)
     if (do_resize) {
-
         int current_shortest = std::min(image.cols, image.rows);
         float scale_factor = static_cast<float>(shortest_edge) / current_shortest;
         int new_width = static_cast<int>(image.cols * scale_factor + 0.5f);   // Round to nearest
@@ -302,7 +299,6 @@ std::vector<float> process_image(const std::string& image_path) {
 
     // Center crop to 224x224
     if (do_center_crop) {
-
         // Ensure image is at least crop_size in both dimensions
         if (image.cols < crop_size || image.rows < crop_size) {
             std::cerr << "Error: Image too small for cropping. Size: " << image.cols << "x"
@@ -313,7 +309,6 @@ std::vector<float> process_image(const std::string& image_path) {
         int left = (image.cols - crop_size) / 2;
         int top = (image.rows - crop_size) / 2;
         cv::Rect crop_rect(left, top, crop_size, crop_size);
-
 
         image = image(crop_rect);
     }
@@ -389,7 +384,6 @@ struct SimpleTokenizer {
         // Add special image token with hardcoded ID
         vocab["<image>"] = IMAGE_TOKEN_INDEX;
         id_to_token[IMAGE_TOKEN_INDEX] = "<image>";
-
     }
 
     std::string preprocess(const std::string& text) {
@@ -607,7 +601,6 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
         hidden_states_shape.data(), hidden_states_shape.size());
     decoder_input_values.push_back(std::move(hidden_states_tensor));
 
-
     // Run prefill inference
     auto prefill_outputs = decoding_session.Run(
         Ort::RunOptions{nullptr}, decoder_input_names.data(), decoder_input_values.data(),
@@ -616,11 +609,9 @@ std::pair<int, std::vector<Ort::Value>> run_prefill(Ort::Session& decoding_sessi
     auto decoder_end = std::chrono::high_resolution_clock::now();
     auto decoder_duration = std::chrono::duration<double>(decoder_end - decoder_start).count();
 
-
     // Get logits and find next token using argmax
     auto logits_shape = prefill_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
     const float* logits_data = prefill_outputs[0].GetTensorData<float>();
-
 
     // Get last token logits for next token prediction
     int vocab_size = logits_shape[2];
@@ -793,7 +784,6 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
     auto decode_end = std::chrono::high_resolution_clock::now();
     auto decode_duration = std::chrono::duration<double>(decode_end - decode_start).count();
 
-
     // Decode full response
     std::string response = tokenizer.decode(generated_ids);
 
@@ -808,7 +798,6 @@ void run_decode_with_performance(Ort::Session& text_emb_session, Ort::Session& d
 }
 
 int main() {
-
     // Development Plan - VLM Text Generation Implementation
     // ===================================================
 
@@ -831,8 +820,6 @@ int main() {
     auto load_end = std::chrono::high_resolution_clock::now();
     auto load_duration = std::chrono::duration<double>(load_end - load_start).count();
 
-
-
     // 2. Initialize Tokenizer (similar to run_vlm.py lines 26-27)
     std::string tokenizer_path = "../../llm_vlm_onnx_sample/vlm/tokenizer";
     SimpleTokenizer tokenizer(tokenizer_path);
@@ -842,10 +829,8 @@ int main() {
     std::string image_path = "../../llm_vlm_onnx_sample/assets/test_image.png";
     std::string output_path = "output.txt";
 
-
     // 4. Image Processing Function (similar to run_vlm.py lines 36-90)
     auto image_tensor_data = process_image(image_path);
-
 
     // 5. Prefill Step (similar to run_vlm.py lines 117-170) - Performance measurement start
     int64_t generation_start_ms = get_time_ms();
@@ -875,7 +860,6 @@ int main() {
         std::cerr << "Error: <image> token not found in input_ids" << std::endl;
         return 1;
     }
-
 
     // Create memory info for tensor creation
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
@@ -924,7 +908,6 @@ int main() {
     // Calculate new token length (similar to run_vlm.py line 140)
     int input_token_len = image_token_pos + 197 + (input_ids.size() - image_token_pos - 1);
 
-
     // Print merged embedding results
     std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), 896};
 
@@ -937,7 +920,6 @@ int main() {
     // Measure TTFT (Time-to-First-Token)
     int64_t first_token_time_ms = get_time_ms();
     double ttft_ms = first_token_time_ms - generation_start_ms;
-
 
     // 6. Decode Step (similar to run_vlm.py lines 216-271) with performance measurement
     int64_t decode_start_ms = get_time_ms();
