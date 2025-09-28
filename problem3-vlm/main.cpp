@@ -610,8 +610,8 @@ int main() {
                                  post_image_text_emb.end());
 
     // Calculate new token length
-    int input_token_len =
-        image_token_pos + IMAGE_FEATURES_COUNT + (input_ids.size() - image_token_pos - 1);
+    // Original tokens - 1 (image token) + IMAGE_FEATURES_COUNT (image features)
+    int input_token_len = input_ids.size() - 1 + IMAGE_FEATURES_COUNT;
 
     // Print merged embedding results
     std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), HIDDEN_SIZE};
