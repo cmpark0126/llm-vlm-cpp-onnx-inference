@@ -14,7 +14,6 @@ using json = nlohmann::json;
 
 // Constants
 const int PREFILL_SEQ_LEN = 128;
-const int DEFAULT_MAX_NEW_TOKENS = 1024;
 
 // Get whether to unload prefill model before decode from environment variable
 bool get_unload_prefill_before_decode() {
@@ -618,7 +617,7 @@ int main() {
     // Start decode loop
     const std::vector<int64_t> EOS_TOKEN_IDS = {1, 106};  // [1, 106] from test_gemma.py
 
-    std::cout << "Starting decode loop (max " << DEFAULT_MAX_NEW_TOKENS << " tokens)..."
+    std::cout << "Starting decode loop (max " << MAX_SEQ_LEN << " tokens)..."
               << std::endl;
 
     // Performance measurement variables
@@ -637,7 +636,7 @@ int main() {
     // Start timing here for generation loop
     int64_t generation_start_ms = get_time_ms();
 
-    for (int i = 0; i < DEFAULT_MAX_NEW_TOKENS - 1; i++) {
+    for (int i = 0; i < MAX_SEQ_LEN - 1; i++) {
         int64_t token_start_ms = get_time_ms();
 
         // Run decode inference
