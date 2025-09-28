@@ -13,14 +13,10 @@ find_library(ONNXRUNTIME_LIB onnxruntime
 # OpenCV (system package)
 find_package(OpenCV REQUIRED)
 
-# nlohmann/json for JSON parsing
-include(FetchContent)
-FetchContent_Declare(json
-    GIT_REPOSITORY https://github.com/nlohmann/json.git
-    GIT_TAG v3.11.3)
-FetchContent_MakeAvailable(json)
+# Add common directory
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../common ${CMAKE_BINARY_DIR}/common)
 
 add_executable(problem3_vlm main.cpp)
 
 target_include_directories(problem3_vlm PRIVATE ${ONNXRUNTIME_INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
-target_link_libraries(problem3_vlm ${ONNXRUNTIME_LIB} ${OpenCV_LIBS} nlohmann_json::nlohmann_json)
+target_link_libraries(problem3_vlm ${ONNXRUNTIME_LIB} ${OpenCV_LIBS} VlmTokenizer)

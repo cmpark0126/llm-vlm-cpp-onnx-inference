@@ -62,6 +62,8 @@
 
 ### Problem 3: VLM 텍스트 생성
 **구현 내용:**
+- VLM 예제 구동에 필요한 Tokenizer 구현 (common/VlmTokenizer.*)
+  - problem1과 마찬가지로 python 예제에서 활용된 tokenizer의 동작을 바탕으로 text preprocess, encode, decode 구현
 - f16을 다루는 부분
 - python 구현과의 비교를 위해 sampling을 꺼뒀지만, 키면 랜덤한 그럴싸한 결과가 잘 나오는것을 확인할 수 있음
 
