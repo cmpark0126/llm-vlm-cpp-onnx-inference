@@ -37,15 +37,12 @@ struct SimpleTokenizer {
 
         // Build vocab from model.vocab if exists
         if (tokenizer_config.contains("model") && tokenizer_config["model"].contains("vocab")) {
-            std::cout << "Vocab found" << std::endl;
             for (const auto& [key, value] : tokenizer_config["model"]["vocab"].items()) {
                 vocab[key] = value;
                 id_to_token[value] = key;
             }
         }
 
-        std::cout << "Tokenizer loaded with " << vocab.size() << " tokens from: " << tokenizer_path
-                  << std::endl;
     }
 
     std::string preprocess(const std::string& text) {
@@ -102,7 +99,6 @@ struct SimpleTokenizer {
         // If it's a special token (starts with <), try direct match first
         if (!segment.empty() && segment[0] == '<' && segment.back() == '>') {
             if (vocab.find(segment) != vocab.end()) {
-                std::cout << "Special token found: " << segment << std::endl;
                 tokens.push_back(vocab[segment]);
                 return tokens;
             }
@@ -117,7 +113,6 @@ struct SimpleTokenizer {
             for (size_t len = std::min(segment.length() - pos, (size_t)100); len > 0; len--) {
                 std::string candidate = segment.substr(pos, len);
                 if (vocab.find(candidate) != vocab.end()) {
-                    std::cout << "Regular token found: " << candidate << std::endl;
                     longest_match = candidate;
                     longest_token_id = vocab[candidate];
                     break;
@@ -378,11 +373,6 @@ int main() {
     int num_hidden_layers = config_json["num_hidden_layers"];
     int eos_token_id = DEFAULT_EOS_TOKEN_ID;
 
-    std::cout << "Config loaded:" << std::endl;
-    std::cout << "  num_key_value_heads: " << num_key_value_heads << std::endl;
-    std::cout << "  head_dim: " << head_dim << std::endl;
-    std::cout << "  num_hidden_layers: " << num_hidden_layers << std::endl;
-    std::cout << "  eos_token_id: " << eos_token_id << std::endl;
 
     // 2. Prepare inputs
     SimpleTokenizer tokenizer(path_to_tokenizer);
@@ -397,23 +387,11 @@ int main() {
     // Apply tokenizer
     auto input_ids = tokenizer.encode(preprocessed_prompt);
 
-    // Verify encoding by decoding and comparing with preprocessed prompt
-    std::string decoded_prompt = tokenizer.decode(input_ids);
-    std::cout << "Original prompt: \"" << escape_special_chars(prompt) << "\"" << std::endl;
-    std::cout << "Decoded prompt: \"" << escape_special_chars(decoded_prompt) << "\"" << std::endl;
-
-    std::cout << "All tokens: ";
-    for (int64_t token : input_ids) {
-        std::cout << token << " ";
-    }
-    std::cout << std::endl;
 
     // Prepare decoder inputs
     int batch_size = DEFAULT_BATCH_SIZE;
     int seq_len = input_ids.size();
 
-    std::cout << "Batch size: " << batch_size << std::endl;
-    std::cout << "Sequence length: " << seq_len << std::endl;
 
     // Initialize ONNX Runtime
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "LLMInference");
@@ -450,7 +428,6 @@ int main() {
     Ort::SessionOptions session_options;
     Ort::Session decoder_session(env, model_path.c_str(), session_options);
 
-    std::cout << "ONNX model loaded successfully: " << model_path << std::endl;
 
     // Get all output names dynamically from the model
     Ort::AllocatorWithDefaultOptions allocator;
@@ -458,12 +435,10 @@ int main() {
     std::vector<const char*> output_names(output_count);
     std::vector<std::string> output_names_storage(output_count);
 
-    // std::cout << "Model has " << output_count << " outputs:" << std::endl;
     for (size_t i = 0; i < output_count; ++i) {
         auto output_name_allocated = decoder_session.GetOutputNameAllocated(i, allocator);
         output_names_storage[i] = std::string(output_name_allocated.get());
         output_names[i] = output_names_storage[i].c_str();
-        // std::cout << "  Output " << i << ": " << output_names[i] << std::endl;
     }
 
     // Generation loop with performance measurements
@@ -501,7 +476,6 @@ int main() {
 
     for (int i = 0; i < max_new_tokens; i++) {
         int64_t token_start_ms = get_time_ms();
-        // std::cout << "Generation step " << (i + 1) << "/" << max_new_tokens << std::endl;
 
         // Create tensors for current iteration
         auto current_input_ids_tensor =
@@ -522,8 +496,6 @@ int main() {
                                            current_input_values.data(), current_input_values.size(),
                                            output_names.data(), output_names.size());
 
-        // std::cout << "  Total outputs received: " << outputs.size() << std::endl;
-        // std::cout << "  Model output count: " << output_count << std::endl;
 
         // Get logits and find argmax (next token)
         const float* logits_data = outputs[0].GetTensorData<float>();
@@ -548,8 +520,6 @@ int main() {
             }
         }
 
-        // std::cout << "  Next token ID: " << next_token_id << " (logit: " << max_logit << ")" <<
-        // std::endl;
 
         // Add to generated tokens
         generated_tokens.push_back(next_token_id);
@@ -576,7 +546,7 @@ int main() {
 
         // Check for EOS token
         if (next_token_id == eos_token_id) {
-            std::cout << std::endl;  // << "  EOS token reached, stopping generation" << std::endl;
+            std::cout << std::endl;
             break;
         }
 
@@ -598,23 +568,16 @@ int main() {
             }
             current_past_kv_tensors = create_past_kv_tensors_from_present(
                 present_kv_outputs, num_hidden_layers, memory_info);
-            // std::cout << "  Updated past_key_values from " << present_kv_outputs.size() << "
-            // present outputs" << std::endl;
         } else {
-            // std::cout << "  No present_key_values in outputs, using empty past_key_values" <<
-            // std::endl;
             current_past_kv_tensors = create_past_kv_tensors(
                 num_hidden_layers, batch_size, num_key_value_heads, head_dim, memory_info);
         }
 
-        // std::cout << "  Updated input_ids: [" << current_input_ids[0] << "]" << std::endl;
-        // std::cout << "  Updated position_ids: [" << current_position_ids[0] << "]" << std::endl;
     }
 
     // Final batch decode (like Python's tokenizer.batch_decode)
     std::string final_decoded_text = tokenizer.decode(generated_tokens);
-    std::string escaped_text = escape_special_chars(final_decoded_text);
-    std::cout << "[\"" << escaped_text << "\"]" << std::endl;
+    std::cout << "\nFinal output: " << final_decoded_text << std::endl;
 
     // Performance measurements
     int64_t generation_end_ms = get_time_ms();
