@@ -19,6 +19,11 @@
 
 using json = nlohmann::json;
 
+// Constants
+const int64_t IMAGE_TOKEN_INDEX = 151646;
+const int MAX_GEN_LEN = 128;
+const bool USE_SAMPLING = false;  // true for top-p sampling, false for argmax
+
 // Float16 to float32 conversion function
 float uint16_to_float32(uint16_t h) {
     uint32_t sign = (h & 0x8000) << 16;
@@ -51,188 +56,7 @@ float uint16_to_float32(uint16_t h) {
     return *reinterpret_cast<float*>(&result);
 }
 
-// Constants
-const int64_t IMAGE_TOKEN_INDEX = 151646;
-const int MAX_GEN_LEN = 128;
-const bool USE_SAMPLING = false;  // true for top-p sampling, false for argmax
-
-// Text embedding function
-std::vector<float> run_text_embedding(Ort::Session& text_emb_session,
-                                      const std::vector<int64_t>& input_ids,
-                                      Ort::MemoryInfo& memory_info,
-                                      Ort::AllocatorWithDefaultOptions& allocator) {
-    // Get text embedding
-    std::vector<int64_t> input_ids_copy(input_ids.begin(), input_ids.end());
-    std::vector<int64_t> input_ids_shape = {1, static_cast<int64_t>(input_ids.size())};
-
-    auto text_input_tensor =
-        Ort::Value::CreateTensor<int64_t>(memory_info, input_ids_copy.data(), input_ids_copy.size(),
-                                          input_ids_shape.data(), input_ids_shape.size());
-
-    // Get input/output names
-    auto input_name_allocated = text_emb_session.GetInputNameAllocated(0, allocator);
-    auto output_name_allocated = text_emb_session.GetOutputNameAllocated(0, allocator);
-
-    std::vector<const char*> text_input_names = {input_name_allocated.get()};
-    std::vector<const char*> text_output_names = {output_name_allocated.get()};
-
-    std::vector<Ort::Value> text_input_values;
-    text_input_values.push_back(std::move(text_input_tensor));
-
-    // Run inference
-    auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
-                                             text_input_values.data(), text_input_values.size(),
-                                             text_output_names.data(), text_output_names.size());
-
-    // Convert float16 output to float32
-    auto text_shape = text_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-
-    size_t total_elements = 1;
-    for (auto dim : text_shape) total_elements *= dim;
-
-    // Get raw float16 data from ONNX output
-    const uint16_t* float16_raw_data =
-        reinterpret_cast<const uint16_t*>(text_outputs[0].GetTensorData<void>());
-
-    // Convert to float32 for easier processing
-    std::vector<float> hidden_states_float32;
-    hidden_states_float32.reserve(total_elements);
-
-    for (size_t i = 0; i < total_elements; i++) {
-        hidden_states_float32.push_back(uint16_to_float32(float16_raw_data[i]));
-    }
-
-    return hidden_states_float32;
-}
-
-// Image embedding function
-std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
-                                       const std::vector<float>& image_tensor_data,
-                                       Ort::MemoryInfo& memory_info,
-                                       Ort::AllocatorWithDefaultOptions& allocator) {
-    // Create image input tensor [1, 3, 224, 224]
-    std::vector<int64_t> image_shape = {1, 3, 224, 224};
-    auto image_input_tensor = Ort::Value::CreateTensor<float>(
-        memory_info, const_cast<float*>(image_tensor_data.data()), image_tensor_data.size(),
-        image_shape.data(), image_shape.size());
-
-    // Get input/output names
-    auto input_name_allocated = image_emb_session.GetInputNameAllocated(0, allocator);
-    auto output_name_allocated = image_emb_session.GetOutputNameAllocated(0, allocator);
-
-    std::vector<const char*> image_input_names = {input_name_allocated.get()};
-    std::vector<const char*> image_output_names = {output_name_allocated.get()};
-
-    std::vector<Ort::Value> image_input_values;
-    image_input_values.push_back(std::move(image_input_tensor));
-
-    // Run inference
-    auto image_outputs = image_emb_session.Run(
-        Ort::RunOptions{nullptr}, image_input_names.data(), image_input_values.data(),
-        image_input_values.size(), image_output_names.data(), image_output_names.size());
-
-    // Get output shape [1, 197, 896]
-    auto image_shape_out = image_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-
-    size_t total_elements = 1;
-    for (auto dim : image_shape_out) total_elements *= dim;
-
-    // Get raw float32 data from ONNX output
-    const float* image_data = image_outputs[0].GetTensorData<float>();
-
-    // Convert to vector
-    std::vector<float> image_features_proj(image_data, image_data + total_elements);
-
-    return image_features_proj;
-}
-
-// Top-P Sampling Function (similar to run_vlm.py lines 93-107)
-int top_p_sampling(const float* logits, int vocab_size, float top_p = 0.99f) {
-    // Create vector of (logit, index) pairs
-    std::vector<std::pair<float, int>> logit_pairs;
-    for (int i = 0; i < vocab_size; i++) {
-        logit_pairs.push_back({logits[i], i});
-    }
-
-    // Sort by logit value in descending order
-    std::sort(logit_pairs.begin(), logit_pairs.end(),
-              [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
-                  return a.first > b.first;
-              });
-
-    // Convert to probabilities and compute cumulative
-    float max_logit_for_softmax = logit_pairs[0].first;
-    std::vector<float> probs;
-    float sum_exp = 0.0f;
-
-    for (const auto& pair : logit_pairs) {
-        float exp_val = std::exp(pair.first - max_logit_for_softmax);
-        probs.push_back(exp_val);
-        sum_exp += exp_val;
-    }
-
-    // Normalize probabilities
-    for (auto& prob : probs) {
-        prob /= sum_exp;
-    }
-
-    // Compute cumulative probabilities and find cutoff
-    float cumulative = 0.0f;
-    int cutoff_index = 0;
-
-    for (int i = 0; i < probs.size(); i++) {
-        cumulative += probs[i];
-        if (cumulative >= top_p) {
-            cutoff_index = i;
-            break;
-        }
-    }
-    cutoff_index = std::max(0, cutoff_index);
-
-    // Renormalize probabilities for sampling
-    float renorm_sum = 0.0f;
-    for (int i = 0; i <= cutoff_index; i++) {
-        renorm_sum += probs[i];
-    }
-
-    for (int i = 0; i <= cutoff_index; i++) {
-        probs[i] /= renorm_sum;
-    }
-
-    // Sample using random number
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dis(0.0f, 1.0f);
-    float random_val = dis(gen);
-
-    int selected_idx = 0;
-    float cum_prob = 0.0f;
-    for (int i = 0; i <= cutoff_index; i++) {
-        cum_prob += probs[i];
-        if (random_val <= cum_prob) {
-            selected_idx = i;
-            break;
-        }
-    }
-
-    return logit_pairs[selected_idx].second;
-}
-
-// Performance measurement functions
-static int64_t get_time_ms() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::high_resolution_clock::now().time_since_epoch())
-        .count();
-}
-
-size_t get_peak_memory_usage() {
-    struct rusage usage;
-    getrusage(RUSAGE_SELF, &usage);
-    // ru_maxrss is in kilobytes on Linux/macOS
-    return usage.ru_maxrss * 1024;  // convert KB to bytes
-}
-
-// Image processing function (similar to run_vlm.py lines 36-90)
+// Image processing function
 std::vector<float> process_image(const std::string& image_path) {
     // Parameters from Python code
     const int crop_size = 224;
@@ -325,6 +149,168 @@ std::vector<float> process_image(const std::string& image_path) {
     }
 
     return result;
+}
+
+// Top-P Sampling Function
+int top_p_sampling(const float* logits, int vocab_size, float top_p = 0.99f) {
+    // Create vector of (logit, index) pairs
+    std::vector<std::pair<float, int>> logit_pairs;
+    for (int i = 0; i < vocab_size; i++) {
+        logit_pairs.push_back({logits[i], i});
+    }
+
+    // Sort by logit value in descending order
+    std::sort(logit_pairs.begin(), logit_pairs.end(),
+              [](const std::pair<float, int>& a, const std::pair<float, int>& b) {
+                  return a.first > b.first;
+              });
+
+    // Convert to probabilities and compute cumulative
+    float max_logit_for_softmax = logit_pairs[0].first;
+    std::vector<float> probs;
+    float sum_exp = 0.0f;
+
+    for (const auto& pair : logit_pairs) {
+        float exp_val = std::exp(pair.first - max_logit_for_softmax);
+        probs.push_back(exp_val);
+        sum_exp += exp_val;
+    }
+
+    // Normalize probabilities
+    for (auto& prob : probs) {
+        prob /= sum_exp;
+    }
+
+    // Compute cumulative probabilities and find cutoff
+    float cumulative = 0.0f;
+    int cutoff_index = 0;
+
+    for (int i = 0; i < probs.size(); i++) {
+        cumulative += probs[i];
+        if (cumulative >= top_p) {
+            cutoff_index = i;
+            break;
+        }
+    }
+    cutoff_index = std::max(0, cutoff_index);
+
+    // Renormalize probabilities for sampling
+    float renorm_sum = 0.0f;
+    for (int i = 0; i <= cutoff_index; i++) {
+        renorm_sum += probs[i];
+    }
+
+    for (int i = 0; i <= cutoff_index; i++) {
+        probs[i] /= renorm_sum;
+    }
+
+    // Sample using random number
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> dis(0.0f, 1.0f);
+    float random_val = dis(gen);
+
+    int selected_idx = 0;
+    float cum_prob = 0.0f;
+    for (int i = 0; i <= cutoff_index; i++) {
+        cum_prob += probs[i];
+        if (random_val <= cum_prob) {
+            selected_idx = i;
+            break;
+        }
+    }
+
+    return logit_pairs[selected_idx].second;
+}
+
+// Text embedding function
+std::vector<float> run_text_embedding(Ort::Session& text_emb_session,
+                                      const std::vector<int64_t>& input_ids,
+                                      Ort::MemoryInfo& memory_info,
+                                      Ort::AllocatorWithDefaultOptions& allocator) {
+    // Get text embedding
+    std::vector<int64_t> input_ids_shape = {1, static_cast<int64_t>(input_ids.size())};
+
+    auto text_input_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(input_ids.data()), input_ids.size(),
+                                          input_ids_shape.data(), input_ids_shape.size());
+
+    // Get input/output names
+    auto input_name_allocated = text_emb_session.GetInputNameAllocated(0, allocator);
+    auto output_name_allocated = text_emb_session.GetOutputNameAllocated(0, allocator);
+
+    std::vector<const char*> text_input_names = {input_name_allocated.get()};
+    std::vector<const char*> text_output_names = {output_name_allocated.get()};
+
+    std::vector<Ort::Value> text_input_values;
+    text_input_values.push_back(std::move(text_input_tensor));
+
+    // Run inference
+    auto text_outputs = text_emb_session.Run(Ort::RunOptions{nullptr}, text_input_names.data(),
+                                             text_input_values.data(), text_input_values.size(),
+                                             text_output_names.data(), text_output_names.size());
+
+    // Convert float16 output to float32
+    auto text_shape = text_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+
+    size_t total_elements = 1;
+    for (auto dim : text_shape) total_elements *= dim;
+
+    // Get raw float16 data from ONNX output
+    const uint16_t* float16_raw_data =
+        reinterpret_cast<const uint16_t*>(text_outputs[0].GetTensorData<void>());
+
+    // Convert to float32 for easier processing
+    // bytes size가 다르기 때문에 명시적인 변환이 필요
+    std::vector<float> hidden_states_float32;
+    hidden_states_float32.reserve(total_elements);
+
+    for (size_t i = 0; i < total_elements; i++) {
+        hidden_states_float32.push_back(uint16_to_float32(float16_raw_data[i]));
+    }
+
+    return hidden_states_float32;
+}
+
+// Image embedding function
+std::vector<float> run_image_embedding(Ort::Session& image_emb_session,
+                                       const std::vector<float>& image_tensor_data,
+                                       Ort::MemoryInfo& memory_info,
+                                       Ort::AllocatorWithDefaultOptions& allocator) {
+    // Create image input tensor [1, 3, 224, 224]
+    std::vector<int64_t> image_shape = {1, 3, 224, 224};
+    auto image_input_tensor = Ort::Value::CreateTensor<float>(
+        memory_info, const_cast<float*>(image_tensor_data.data()), image_tensor_data.size(),
+        image_shape.data(), image_shape.size());
+
+    // Get input/output names
+    auto input_name_allocated = image_emb_session.GetInputNameAllocated(0, allocator);
+    auto output_name_allocated = image_emb_session.GetOutputNameAllocated(0, allocator);
+
+    std::vector<const char*> image_input_names = {input_name_allocated.get()};
+    std::vector<const char*> image_output_names = {output_name_allocated.get()};
+
+    std::vector<Ort::Value> image_input_values;
+    image_input_values.push_back(std::move(image_input_tensor));
+
+    // Run inference
+    auto image_outputs = image_emb_session.Run(
+        Ort::RunOptions{nullptr}, image_input_names.data(), image_input_values.data(),
+        image_input_values.size(), image_output_names.data(), image_output_names.size());
+
+    // Get output shape [1, 197, 896]
+    auto image_shape_out = image_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+
+    size_t total_elements = 1;
+    for (auto dim : image_shape_out) total_elements *= dim;
+
+    // Get raw float32 data from ONNX output
+    const float* image_data = image_outputs[0].GetTensorData<float>();
+
+    // Convert to vector
+    std::vector<float> image_features_proj(image_data, image_data + total_elements);
+
+    return image_features_proj;
 }
 
 // Prefill function
@@ -575,14 +561,25 @@ std::vector<int64_t> run_decode(Ort::Session& text_emb_session, Ort::Session& de
     return generated_ids;
 }
 
+// Performance measurement functions
+static int64_t get_time_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::high_resolution_clock::now().time_since_epoch())
+        .count();
+}
+
+size_t get_peak_memory_usage() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    // ru_maxrss is in kilobytes on Linux/macOS
+    return usage.ru_maxrss * 1024;  // convert KB to bytes
+}
+
 int main() {
     // Development Plan - VLM Text Generation Implementation
     // ===================================================
 
-    // 1. Load ONNX Sessions (similar to run_vlm.py lines 13-22)
-    auto load_start = std::chrono::high_resolution_clock::now();
-
-    // Initialize ONNX Runtime
+    // 1. Load ONNX Sessions
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "VLMInference");
     Ort::SessionOptions session_options;
 
@@ -595,10 +592,7 @@ int main() {
     Ort::Session text_emb_session(env, token_embedding_path.c_str(), session_options);
     Ort::Session decoding_session(env, decoder_path.c_str(), session_options);
 
-    auto load_end = std::chrono::high_resolution_clock::now();
-    auto load_duration = std::chrono::duration<double>(load_end - load_start).count();
-
-    // 2. Initialize Tokenizer (similar to run_vlm.py lines 26-27)
+    // 2. Initialize Tokenizer
     std::string tokenizer_path = "../../llm_vlm_onnx_sample/vlm/tokenizer";
     VlmTokenizer tokenizer(tokenizer_path);
 
@@ -606,25 +600,25 @@ int main() {
     std::string input_text = "Where was this photo taken?";
     std::string image_path = "../../llm_vlm_onnx_sample/assets/test_image.png";
 
-    // 4. Image Processing Function (similar to run_vlm.py lines 36-90)
+    // 4. Image Processing Function
     auto image_tensor_data = process_image(image_path);
 
-    // 5. Prefill Step (similar to run_vlm.py lines 117-170) - Performance measurement start
+    // 5. Prefill Step - Performance measurement start
     int64_t generation_start_ms = get_time_ms();
     auto prefill_start = std::chrono::high_resolution_clock::now();
 
-    // Create prompt with image token (similar to run_vlm.py line 30)
+    // Create prompt with image token
     std::string prompt =
         "<|im_start|>system\nYou are a helpful "
         "assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is "
         "from?<|im_end|>\n<|im_start|>assistant\n";
 
-    // Tokenize input prompt (similar to run_vlm.py line 121)
+    // Tokenize input prompt
     std::string preprocessed_prompt = tokenizer.preprocess(prompt);
 
     auto input_ids = tokenizer.encode(preprocessed_prompt);
 
-    // Find image token position (similar to run_vlm.py line 122)
+    // Find image token position
     int image_token_pos = -1;
     for (size_t i = 0; i < input_ids.size(); i++) {
         if (input_ids[i] == IMAGE_TOKEN_INDEX) {
@@ -642,14 +636,14 @@ int main() {
     Ort::MemoryInfo memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     Ort::AllocatorWithDefaultOptions allocator;
 
-    // Get image embedding (similar to run_vlm.py lines 127-128)
+    // Get image embedding
     auto image_features_proj =
         run_image_embedding(image_emb_session, image_tensor_data, memory_info, allocator);
 
-    // Get text embedding (similar to run_vlm.py lines 131-132)
+    // Get text embedding
     auto text_embeddings = run_text_embedding(text_emb_session, input_ids, memory_info, allocator);
 
-    // Split text embedding around image token (similar to run_vlm.py lines 135-136)
+    // Split text embedding around image token
     std::vector<float> pre_image_text_emb;
     std::vector<float> post_image_text_emb;
 
@@ -669,7 +663,7 @@ int main() {
         }
     }
 
-    // Merge text embedding and image embedding (similar to run_vlm.py line 139)
+    // Merge text embedding and image embedding
     std::vector<float> hidden_states_float32;
     hidden_states_float32.reserve(pre_image_text_emb.size() + image_features_proj.size() +
                                   post_image_text_emb.size());
@@ -682,13 +676,13 @@ int main() {
     hidden_states_float32.insert(hidden_states_float32.end(), post_image_text_emb.begin(),
                                  post_image_text_emb.end());
 
-    // Calculate new token length (similar to run_vlm.py line 140)
+    // Calculate new token length
     int input_token_len = image_token_pos + 197 + (input_ids.size() - image_token_pos - 1);
 
     // Print merged embedding results
     std::vector<int64_t> text_shape = {1, static_cast<int64_t>(input_token_len), 896};
 
-    // 5. Prefill Step (similar to run_vlm.py lines 187-206)
+    // 5. Prefill Step
     auto prefill_result = run_prefill(decoding_session, hidden_states_float32, input_token_len,
                                       memory_info, allocator, tokenizer);
     int next_token = prefill_result.first;

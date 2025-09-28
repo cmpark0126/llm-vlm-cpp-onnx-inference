@@ -38,7 +38,6 @@
 (TODO: 스트리밍 프린팅이 약간의 딜레이를 만들어낼 수 있긴 하겠지만, 실제 측정 결과 큰 차이가 없어 따로 끄지는 않음)
 (초기 메모리 할당 과정을 최적화하면 괜찮아 질지도? 일단 파이썬과 비교한거 넣기)
 
-
 **향후 계획:**
 - Tokenizer가 주어진 예제 이외의 예제로 동작시켜보거나 하지 않아 일반화가 부족할 수 있는 상태이기에 수정 필요
 
@@ -64,7 +63,7 @@
 **구현 내용:**
 - VLM 예제 구동에 필요한 Tokenizer 구현 (common/VlmTokenizer.*)
   - problem1과 마찬가지로 python 예제에서 활용된 tokenizer의 동작을 바탕으로 text preprocess, encode, decode 구현
-- f16을 다루는 부분
+- text embedding 결과물인 f16을 f32로 바꾸어 image embedding과 결합하는 과정을 구현
 - python 구현과의 비교를 위해 sampling을 꺼뒀지만, 키면 랜덤한 그럴싸한 결과가 잘 나오는것을 확인할 수 있음
 
 **성능 관련 고려 사항:**
@@ -72,6 +71,9 @@
 
 **결과:**
 - TODO: 베이스라인 대비 성능 비교
+
+**향후 계획:**
+- f16을 f32로 변환하는 과정을 피하기 위해서 ONNX 모델을 수정하거나, 더 빠르게 변환하는 방법을 찾을 수 있을 것인지?
 
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
