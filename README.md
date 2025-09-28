@@ -9,11 +9,11 @@ docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it cmpark0126/llm-
 $ ... # 컨테이너 내부 자동 진입
 ```
 
-로컬에서 빌드하는 경우:
+로컬에서 빌드하는 경우 (현재 디렉토리 마운트):
 ```bash
 docker build -t llm-vlm-dev .
-docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it llm-vlm-dev
-$ ... # 컨테이너 내부 자동 진입
+docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -it llm-vlm-dev
+$ ... # 컨테이너 내부 자동 진입, 호스트 파일 변경 실시간 반영
 ```
 
 컨테이너 종료 및 제거:
