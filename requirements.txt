@@ -1,6 +1,7 @@
 certifi==2025.8.3
 charset-normalizer==3.4.3
 coloredlogs==15.0.1
+dbus-python==1.2.18
 filelock==3.19.1
 flatbuffers==25.2.10
 fsspec==2025.9.0
@@ -25,7 +26,9 @@ pfzy==0.3.4
 pillow==11.3.0
 prompt_toolkit==3.0.52
 protobuf==6.32.1
+psutil==7.1.0
 Pygments==2.11.2
+PyGObject==3.42.1
 PyYAML==6.0.1
 regex==2025.9.18
 requests==2.32.5

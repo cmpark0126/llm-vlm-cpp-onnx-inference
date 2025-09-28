@@ -9,11 +9,11 @@ docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it cmpark0126/llm-
 $ ... # 컨테이너 내부 자동 진입
 ```
 
-로컬에서 빌드하는 경우:
+로컬에서 빌드하는 경우 (현재 디렉토리 마운트):
 ```bash
 docker build -t llm-vlm-dev .
-docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it llm-vlm-dev
-$ ... # 컨테이너 내부 자동 진입
+docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -it llm-vlm-dev
+$ ... # 컨테이너 내부 자동 진입, 호스트 파일 변경 실시간 반영
 ```
 
 컨테이너 종료 및 제거:
@@ -29,6 +29,8 @@ Docker 컨테이너 내에서:
 git clone https://huggingface.co/geonmin-kim/llm_vlm_onnx_sample
 cd llm_vlm_onnx_sample
 git lfs pull
+cd ../baselines
+# 성능 측정, prompt 수정이 포함된 baseline
 python3 run_llm.py
 python3 run_vlm.py
 ```
@@ -74,7 +76,7 @@ clang-format -i problem3-vlm/main.cpp
 # TODO
 * 결과가 문제가 없는지(예: 추론, 벤치마크 등), 배점을 기반으로 점수 예측 수행
 * 코드 품질 향상 (모듈화, 불필요한 코드 제거, 주석 작성 등)
-* MAC에서 Docker 기반으로 모두 동작하도록 최적화 (혹은 AWS 리눅스 환경 가정 후 재현 가능성이라도 확보)
+* README.md 도 그냥 바로 처음부터 쭉 따라할 수 있는 방식으로 변경
 * 1차 보고서 작성 (최적화 작업 전에 최소 제출을 위해)
   * 코드 품질 향상 후 이를 기반으로 보고서 작성
     * 평가 기준 등 잘 살필 것
