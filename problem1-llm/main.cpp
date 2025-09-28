@@ -41,8 +41,8 @@ Ort::Value create_position_ids_tensor(const std::vector<int64_t>& position_ids, 
 }
 
 std::vector<Ort::Value> create_prefill_past_kv_tensors(int num_hidden_layers, int batch_size,
-                                               int num_key_value_heads, int head_dim,
-                                               const Ort::MemoryInfo& memory_info) {
+                                                       int num_key_value_heads, int head_dim,
+                                                       const Ort::MemoryInfo& memory_info) {
     std::vector<Ort::Value> past_kv_tensors;
     std::vector<int64_t> past_kv_shape = {batch_size, num_key_value_heads, 0, head_dim};
 
