@@ -24,7 +24,6 @@ bool get_unload_prefill_before_decode() {
     return unload_env && (std::string(unload_env) == "true" || std::string(unload_env) == "1");
 }
 
-
 static int64_t get_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::high_resolution_clock::now().time_since_epoch())
@@ -73,23 +72,27 @@ int main() {
     bool unload_prefill = get_unload_prefill_before_decode();
 
     std::string prefill_model_path = "../gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx";
-    std::unique_ptr<Ort::Session> prefill_session = std::make_unique<Ort::Session>(env, prefill_model_path.c_str(), session_options);
+    std::unique_ptr<Ort::Session> prefill_session =
+        std::make_unique<Ort::Session>(env, prefill_model_path.c_str(), session_options);
 
     std::string decode_model_path = "../gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx";
     std::unique_ptr<Ort::Session> decode_session = nullptr;
 
     if (!unload_prefill) {
-        decode_session = std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
+        decode_session =
+            std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
     }
     auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::vector<int64_t> input_shape = {batch_size, PREFILL_SEQ_LEN};
 
     auto input_ids_tensor = Ort::Value::CreateTensor<int64_t>(
         memory_info, input_ids.data(), input_ids.size(), input_shape.data(), input_shape.size());
-    auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, attention_mask.data(), attention_mask.size(), input_shape.data(), input_shape.size());
-    auto position_ids_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, position_ids.data(), position_ids.size(), input_shape.data(), input_shape.size());
+    auto attention_mask_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, attention_mask.data(), attention_mask.size(),
+                                          input_shape.data(), input_shape.size());
+    auto position_ids_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, position_ids.data(), position_ids.size(),
+                                          input_shape.data(), input_shape.size());
 
     std::vector<const char*> input_names = {"input_ids", "attention_mask", "position_ids"};
     std::vector<Ort::Value> input_values;
@@ -107,8 +110,9 @@ int main() {
         output_names[i] = output_names_storage[i].c_str();
     }
 
-    auto outputs = prefill_session->Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
-                                       input_values.size(), output_names.data(), output_names.size());
+    auto outputs =
+        prefill_session->Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
+                             input_values.size(), output_names.data(), output_names.size());
 
     auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
     const float* logits_data = outputs[0].GetTensorData<float>();
@@ -128,7 +132,8 @@ int main() {
 
     if (unload_prefill) {
         prefill_session.reset();
-        decode_session = std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
+        decode_session =
+            std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
     }
 
     int64_t current_token = next_token_id;
@@ -218,7 +223,6 @@ int main() {
             padded_shape.size());
         past_kv_tensors.push_back(std::move(padded_value_tensor));
     }
-
 
     // Create decode input tensors
     std::vector<int64_t> decode_input_shape = {1, 1};
@@ -361,8 +365,8 @@ int main() {
             memory_info, decode_attention_mask.data(), decode_attention_mask.size(),
             decode_attention_shape.data(), decode_attention_shape.size()));
         decode_input_values.push_back(Ort::Value::CreateTensor<int64_t>(
-            memory_info, cache_position.data(), cache_position.size(),
-            cache_position_shape.data(), cache_position_shape.size()));
+            memory_info, cache_position.data(), cache_position.size(), cache_position_shape.data(),
+            cache_position_shape.size()));
         for (size_t i = 1; i < decode_outputs.size(); i++) {
             decode_input_values.push_back(std::move(decode_outputs[i]));
         }
