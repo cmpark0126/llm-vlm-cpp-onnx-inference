@@ -137,6 +137,7 @@
 
 **결과**:
 - **기능 검증**: Python과 C++ 구현이 **거의 동일한** 결과 출력 확인. 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
+    - 굵은 글씨가 결과가 다른 부분
 
     - Python: 
         "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
