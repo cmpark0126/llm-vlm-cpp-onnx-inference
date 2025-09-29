@@ -1,52 +1,40 @@
 # LLM/VLM C++ ONNX Inference
 
-## Docker 개발 & 실행 환경
-Docker Hub에서 이미지 사용:
-```bash
-docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it cmpark0126/llm-vlm-cpp-onnx-inference:latest
-# 또는 특정 커밋 해시 버전
-# docker run --name llm-vlm-dev --memory="16g" --shm-size="8g" -it cmpark0126/llm-vlm-cpp-onnx-inference:{commit-hash}
-$ ... # 컨테이너 내부 자동 진입
-```
+- 모든 동작은 AWS의 `Ubuntu Server 24.04 LTS (HVM),EBS General Purpose (SSD) Volume Type.` Amazon Machine Image, `t2.2xlarge` Instance Type, 60GiB Storage 환경을 기준으로 합니다.
+- Docker가 설치되어 있고, 16GiB 메모리, Storage 60GiB 이상이 확보되는 경우에는 MAC이나 다른 환경에서도 동작 가능할 것으로 예상되나, 제대로 테스트되지는 않았습니다.
 
-로컬에서 빌드하는 경우 (현재 디렉토리 마운트):
+## AWS EC2 기준 Docker Container 환경 준비
 ```bash
-docker build -t llm-vlm-dev .
-docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -it llm-vlm-dev
+sudo apt-get update
+sudo apt-get install docker.io
+git clone https://github.com/cmpark0126/llm-vlm-cpp-onnx-inference.git
+cd llm-vlm-cpp-onnx-inference
+sudo docker build -t llm-vlm-dev .
+sudo docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-size="8g" -it llm-vlm-dev
 $ ... # 컨테이너 내부 자동 진입, 호스트 파일 변경 실시간 반영
 ```
 
 컨테이너 종료 및 제거:
 ```bash
-docker stop llm-vlm-dev && docker rm llm-vlm-dev
+sudo docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ```
 
-**참고**: Dockerfile은 자동으로 현재 아키텍처(x86_64 또는 aarch64)에 맞는 ONNX Runtime을 설치합니다.
-
-## 베이스라인
+## 사전 작업 및 과제 실행
 Docker 컨테이너 내에서:
 ```bash
-git clone https://huggingface.co/geonmin-kim/llm_vlm_onnx_sample
-cd llm_vlm_onnx_sample
-git lfs pull
-cd ../baselines
-# 성능 측정, prompt 수정이 포함된 baseline
-python3 run_llm.py
-python3 run_vlm.py
-```
+# 예제 허깅페이스 레포 다운로드 (problem1, 3용)
+./setup.sh
 
-## 실행 방법 (TODO: O3 compile)
-소스 코드는 이미 컨테이너에 포함되어 있습니다. Docker 컨테이너 내에서:
-```bash
+# problem2용 - Hugging Face 토큰 설정
+export HF_TOKEN=your_huggingface_token_here
+
 # 문제 1: LLM 텍스트 생성
 cd problem1-llm
 ./run.sh
 cd ..
 
-# 문제 2: Static graph export & 텍스트 생성 (TODO: compare to original)
+# 문제 2: Static graph export & 텍스트 생성
 cd problem2-static
-# google/gemma-3-1b-it 모델 사용 허가를 받은 후 Hugging Face 토큰으로 로그인
-hf auth login
 ./run.sh
 cd ..
 

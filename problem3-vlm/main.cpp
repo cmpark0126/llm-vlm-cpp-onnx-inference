@@ -575,8 +575,6 @@ int main() {
     auto image_tensor_data = process_image(image_path);
 
     // 5. Prefill Step - Performance measurement start
-    int64_t generation_start_ms = get_time_ms();
-    auto prefill_start = std::chrono::high_resolution_clock::now();
 
     // Create prompt with image token
     std::string prompt =
@@ -588,6 +586,8 @@ int main() {
     std::string preprocessed_prompt = tokenizer.preprocess(prompt);
 
     auto input_ids = tokenizer.encode(preprocessed_prompt);
+
+    int64_t generation_start_ms = get_time_ms();
 
     // Find image token position
     int image_token_pos = -1;

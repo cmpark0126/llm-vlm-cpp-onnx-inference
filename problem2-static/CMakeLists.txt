@@ -17,7 +17,7 @@ FetchContent_Declare(json
     GIT_TAG v3.11.3)
 FetchContent_MakeAvailable(json)
 
-add_executable(problem2_static main.cpp)
+add_executable(problem2_static main.cpp ../common/LlmTokenizer.cpp)
 
 target_include_directories(problem2_static PRIVATE ${ONNXRUNTIME_INCLUDE_DIR})
 target_link_libraries(problem2_static ${ONNXRUNTIME_LIB} nlohmann_json::nlohmann_json)

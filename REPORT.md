@@ -36,21 +36,40 @@
 
 ### Problem 2: Static Graph Export & 텍스트 생성
 **구현 내용:**
-- TODO
+- **Gemma Python 베이스라인 작성:**
+  - Static ONNX graph 추출 전 베이스라인 확보
+  - Problem1과 동일한 입력으로 결과 검증
+  - C++ 구현과의 정확한 비교를 위해 샘플링을 비활성화한 출력 생성
+- **Prefill&Decode Static ONNX Graph 추출:**
+  - `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM` 구현 참고
+  - KV Cache 구현은 `transformers/cache_utils.py`의 `Cache` 인터페이스를 duck typing으로 처리
+  - Prefill과 Decode 각각의 특성에 맞춰 별도 구현
+    - sliding window 구현
+      - Prefill: 128 sequence length로 sliding window 미구현 (베이스라인 512보다 작음)
+      - Decode: 1024 sequence length로 sliding window 구현
+    - KV Cache 구현
+      - Prefill: 런타임에 KV Cache 생성하여 TempCache가 업데이트 결과를 직접 반환
+      - Decode: 이전 KV Cache에 새로운 KV Cache를 업데이트하는 구조 구현
+- **LLM Tokenizer 재사용:**
+  - Problem 1에서 구현한 동일한 Tokenizer 활용
+- **개발 환경 메모리 제약 대응:**
+  - 로컬 개발환경의 메모리 부족으로 `UNLOAD_PREFILL_BEFORE_DECODE` 환경변수 추가
+    - 메모리 절약을 위해 PREFILL을 먼저 로드하여 사용하고 언로드 한 이후 DECODE를 로드하여 사용하는 방식
+  - README.md 예제를 활용한 성능 측정 시에는 초반에 모든 모델을 다 로드하도록 구성되어 있음
 
 **성능 고려 사항:**
-- TODO
+- **Decode KV Cache Shape 통일:**
+  - Shape 통일로 불필요한 복사 제거. 이전 실행의 KV Cache 출력을 직접 move하여 입력으로 재사용
 
 **결과:**
-- TODO: 베이스라인 대비 성능 비교
+- TODO: 베이스라인 대비 성능 비교 (dynamic shape에서 다루는 shape이 작아서 차이가 별로 안 일어나는건가 싶기도 함)
 
-**향후 계획:**
-- Prefill, Decode 모델이 Weight을 공유하게 하여 메모리 최적화를 할 수 있을 것인지?
-- Decode 모델을 여러 크기로 쪼개어서 아직 캐시가 크지 않을때 사용할 모델과, 클 때 사용할 모델을 나누어 보는 것이 가능할지?
-- 사전에 할당된 입출력 메모리에 값이 쓰이도록 하여 불필요한 입출력 복사를 피할 수 있을 것인지?
-- 현재는 단일 배치로만 실행시켜보았는데 다중 배치를 사용할 때는 어떻게 할 것인지?
-- Paged KV Cache를 사용한다거나 하면 어떤 방식을 활용하는 것이 올바를 것인지?
-- ONNX 모델 최적화? Layer 퓨전?
+**향후 개선 방안:**
+- **검증 강화**: 다양한 프롬프트와 토큰 길이로 Decode sliding mask 구현 검증
+- **메모리 최적화**: Prefill/Decode 모델 간 weight 공유 방안 검토, onnx runtime 출력 공간 사전 할당 방안 검토
+- **성능 최적화**: 상황에 따라 decode에서 더 작은 sequence length를 가정하는 kv cache를 사용할 수 있을지 고려
+- **배치 처리**: 다중 배치 지원 방안 고려
+- **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
 
 ### Problem 3: VLM 텍스트 생성
 **사전 작업:**
@@ -105,21 +124,17 @@ the atmosphere, making it a visually appealing scene."
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
 - Peak Memory Usage: [getrusage(2)](https://man7.org/linux/man-pages/man2/getrusage.2.html)
+- C++ 코드 작성에는 Claude Code를 많이 활용했습니다. 모든 코드는 직접 읽어보고 디버깅을 진행했습니다.
 
 ## TODO
-- python과의 성능 비교가 정확히 같은 부분을 비교하도록 구현되어있는 것이 맞는지 점검
+- python과의 성능 비교가 정확히 같은 부분을 비교하도록 구현되어있는 것이 맞는지 점검. 성능 측정에 tokenizing은 제외할 것 
 - 필요시 C++ 프로파일링도 진행해서, 고치지는 못하더라도 어디를 최적화하면 좋을지 보고서에 넣기 (성능 비교 과정에서)
-* 결과가 문제가 없는지(예: 추론, 벤치마크 등), 배점을 기반으로 점수 예측 수행
-* 코드 품질 향상 (모듈화, 불필요한 코드 제거, 주석 작성 등)
-* README.md 도 그냥 바로 처음부터 쭉 따라할 수 있는 방식으로 변경
-* 1차 보고서 작성 (최적화 작업 전에 최소 제출을 위해)
-  * 코드 품질 향상 후 이를 기반으로 보고서 작성
-    * 평가 기준 등 잘 살필 것
-  * 개발 진행하면서 어떤게 힘들었는지
-    * problem1: C++ 자체가 너무 오랜만
-    * problem2: Static 그래프 뽑기 위해서 커스터마이즈가 필요했음, onnx runtime 출력에 대한 사전 할당 등이 생각대로 되지 않아 난감.
-    * problem3: text embedding이 float16이라는 스펙을 간과하여 디버깅이 오래걸림
-* 추가 최적화 진행
-  * 기타: O3 컴파일, ONNX 최적화, TensorRT 등 활용, 복사 최소화, 메모리 재활용 고려, 그래프 최적화 등을 고려해볼 수 있을지도..?
-* 2차 보고서 작성 (최적화 작업 후에 최선의 결과 제출을 위해)
-(TODO: 무언가 비교하는게 좋아보이는데?) (TODO: 여러번 측정한 평균값?) (TODO: 어떤 환경에서 측정한 것인지 맨 위에 적어두는 것이 좋아보이지?) (TODO: 스트리밍 프린팅이 약간의 딜레이를 만들어낼 수 있긴 하겠지만, 실제 측정 결과 큰 차이가 없어 따로 끄지는 않음) (초기 메모리 할당 과정을 최적화하면 괜찮아 질지도? 일단 파이썬과 비교한거 넣기)
+- 결과가 문제가 없는지(예: 추론, 벤치마크 등), 배점을 기반으로 점수 예측 수행
+- O3 컴파일
+- 성능 분석에는 10번 정도 측정한 평균값 사용, 어떤 환경에서 측정한 것인지 (스크립트 만들기, python, C++ 둘 다 마찬가지)
+- 주석들 전반적으로 한글로 수정
+- Python 출력과 확실하게 비교할 수 있도록 모든 실험 이후에 비교 표가 떨어지도록 구성?
+- ONNX Runtime 설정 통일 (thread는 하나만 사용하도록)
+
+## TODO (회사에 말할 것, 주말에 작업을 하는 와중에 생긴거라 연락할 수 없었음을 양해 구할것)
+* 프롬프트를 임의로 바꾸어 테스트함 

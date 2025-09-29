@@ -25,14 +25,6 @@ messages = [
   { "role": "user", "content": "Write me a short poem about Machine Learning." },
 ]
 
-# Performance measurement variables
-process = psutil.Process(os.getpid())
-initial_memory = process.memory_info().rss
-peak_memory = initial_memory
-generation_start_time = time.time()
-first_token_time = None
-first_token_generated = False
-
 ## Apply tokenizer
 inputs = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="np")
 
@@ -49,6 +41,14 @@ position_ids = np.tile(np.arange(1, input_ids.shape[-1] + 1), (batch_size, 1))
 # 3. Generation loop with performance measurements
 max_new_tokens = 128
 generated_tokens = np.array([[]], dtype=np.int64)
+
+# Performance measurement variables
+process = psutil.Process(os.getpid())
+initial_memory = process.memory_info().rss
+peak_memory = initial_memory
+generation_start_time = time.time()
+first_token_time = None
+first_token_generated = False
 
 for i in range(max_new_tokens):
     token_start_time = time.time()
