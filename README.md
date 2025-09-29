@@ -1,7 +1,7 @@
 # LLM/VLM C++ ONNX Inference
 
 - 모든 동작은 AWS의 `Ubuntu Server 24.04 LTS (HVM),EBS General Purpose (SSD) Volume Type.` Amazon Machine Image, `t2.2xlarge` Instance Type, 60GiB Storage 환경을 기준으로 합니다.
-- Docker가 설치되어 있고, 16GiB 메모리, Storage 60GiB 이상이 확보되는 경우에는 MAC이나 다른 환경에서도 동작 가능할 것으로 예상되나, 제대로 테스트되지는 않았습니다.
+- Docker가 설치되어 있고, 16GiB 메모리, 60GiB Storage가 확보되는 경우에는 MAC이나 다른 환경에서도 동작 가능할 것으로 예상되나, 제대로 테스트되지는 않았습니다.
 
 ## AWS EC2 기준 Docker Container 환경 준비
 ```bash
