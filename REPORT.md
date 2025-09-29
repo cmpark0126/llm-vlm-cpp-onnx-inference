@@ -36,39 +36,39 @@
 
 ### Problem 2: Static Graph Export & 텍스트 생성
 **구현 내용:**
-- **Gemma Python 예제 작성:**:
-  - Static onnx graph를 추출하기 전에, 베이스라인 확보
-  - Problem1과 동일한 입력을 그대로 사용했을 때 어떤 결과물이 나오는지 확인
-  - C++ 구현의 결과물과의 올바른 비교를 위해서 샘플링을 끄고 랜덤하지 않은 출력이 나오도록 조정
+- **Gemma Python 베이스라인 작성:**
+  - Static ONNX graph 추출 전 베이스라인 확보
+  - Problem1과 동일한 입력으로 결과 검증
+  - C++ 구현과의 정확한 비교를 위해 샘플링을 비활성화한 출력 생성
 - **Prefill&Decode Static ONNX Graph 추출:**
   - `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM` 구현 참고
-  - 특히, KV Cache 구현은 `transformers/cache_utils.py`의 `Cache`의 인터페이스에 의존하는 부분이 있어 이를 duck typing 하는 방식으로 동작 수행하도록 작업 진행
-  - Prefill, Decode 각각의 경우 약간의 차이가 있어, 따로 구현하여 추출
-    - 예1: Prefill의 경우 128 sequence length는 베이스라인의 sliding_window 크기인 512보다 작아 sliding window를 구현하지 않음. 반면에 Decode는 1024 sequence length를 가질 수 있기에 sliding window를 구현
-    - 예2: Prefill의 경우 KV Cache가 런타임에 만들어지고, 이전에는 전달되는 것이 없어 TempCache가 그냥 updat한 것을 바로 반환하는 방식으로 구현. 반면, Decode는 이전 KV Cache에 새로운 KV Cache를 업데이트 해야 하는 구조를 가지기 때문에 새로운 KV Cache를 이전 KV Cache Tensor에 적용하는 코드 추가
+  - KV Cache 구현은 `transformers/cache_utils.py`의 `Cache` 인터페이스를 duck typing으로 처리
+  - Prefill과 Decode 각각의 특성에 맞춰 별도 구현
+    - sliding window 구현
+      - Prefill: 128 sequence length로 sliding window 미구현 (베이스라인 512보다 작음)
+      - Decode: 1024 sequence length로 sliding window 구현
+    - KV Cache 구현
+      - Prefill: 런타임에 KV Cache 생성하여 TempCache가 업데이트 결과를 직접 반환
+      - Decode: 이전 KV Cache에 새로운 KV Cache를 업데이트하는 구조 구현
 - **LLM Tokenizer 재사용:**
-  - Problem 1에서 사용한 것 과 같은 Tokenizer를 사용하도록 작업
-- **개발을 위해 모델 로딩 시점 조정:**
-  - 개발 환경인 로컬 맥북의 메모리 부족으로 인해 Static Graph를 한번에 로드하기 힘든 문제가 있어 `UNLOAD_PREFILL_BEFORE_DECODE` 환경변수를 사용하여 모델을 한번에 하나만 로딩하여 사용하도록 하는 작업 진행
-  - 실제 성능 측정 등 작업은 AWS의 `t2.2xlarge`에서 수행하여 모든 모델을 사전에 올리고 수행하는 방식을 채택
+  - Problem 1에서 구현한 동일한 Tokenizer 활용
+- **개발 환경 메모리 제약 대응:**
+  - 로컬 개발환경의 메모리 부족으로 `UNLOAD_PREFILL_BEFORE_DECODE` 환경변수 추가
+    - 메모리 절약을 위해 PREFILL을 먼저 로드하여 사용하고 언로드 한 이후 DECODE를 로드하여 사용하는 방식
+  - README.md 예제를 활용한 성능 측정 시에는 초반에 모든 모델을 다 로드하도록 구성되어 있음
 
 **성능 고려 사항:**
-- **Decode KV Cache Input, Output Shape 통일:**
-  - Decode에서 이전 실행 출력 KV Cache를 바로 move해서 입력으로 활용할 수 있도록 Shape를 통일 시켜두어 불필요한 복사를 피함
+- **Decode KV Cache Shape 통일:**
+  - Shape 통일로 불필요한 복사 제거. 이전 실행의 KV Cache 출력을 직접 move하여 입력으로 재사용
 
 **결과:**
 - TODO: 베이스라인 대비 성능 비교
 
-**향후 계획:**
-- Sliding mask에 대한 구현이 올바로 동작하는지 파악하기 위해서는 다양한 프롬프트와 토큰 길이로 테스트가 필요
-- Prefill, Decode 모델이 Weight을 공유하게 하여 메모리 최적화를 할 수 있을 것인지?
-- Prefill에서 나오는 KV Cache 사이즈를 Decode에서 사용할 것의 사이즈와 동일하게 맞추면 성능적으로 더 이점이 있을까?
-- Decode 모델을 여러 크기로 쪼개어서 아직 캐시가 크지 않을때 사용할 모델과, 클 때 사용할 모델을 나누어 보는 것이 가능할지?
-- 사전에 할당된 입출력 메모리에 값이 쓰이도록 하여 불필요한 입출력 복사를 피할 수 있을 것인지?
-- 현재는 단일 배치로만 실행시켜보았는데 다중 배치를 사용할 때는 어떻게 할 것인지?
-- Paged KV Cache를 사용한다거나 하면 어떤 방식을 활용하는 것이 올바를 것인지?
-- ONNX 모델 최적화? Layer 퓨전?
-- 시간 부족으로 프로파일링을 제대로 진행하지 못했는데, 가능하면 프로파일링을 수행하여 병목 지점을 찾아 해결할 수 있었을 것으로 보임
+**향후 개선 방안:**
+- **검증 강화**: 다양한 프롬프트와 토큰 길이로 Decode sliding mask 구현 검증
+- **메모리 최적화**: Prefill/Decode 모델 간 weight 공유 방안 검토
+- **배치 처리**: 다중 배치 지원 방안 고려
+- **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
 
 ### Problem 3: VLM 텍스트 생성
 **사전 작업:**
@@ -150,3 +150,4 @@ the atmosphere, making it a visually appealing scene."
 * 1024로 하면 메모리 사용량이 너무 커 가지고 있는 컴퓨팅 환경에서 돌릴 수 없어, 파라미터를 따로 받도록 구현. 충분하면 1024로 지정하여 실험하며 됨
 * EC2의 특정 instance에서 테스트 마쳤다는 내용 추가 (모든 퍼포먼스는 EC2 기준으로 작성되어 있다고 얘기)
 * 혹시 모르니 Dockerhub에 Push 해둘까..?
+* HF Token은 .env에 설정할 수 있는건가?

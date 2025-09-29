@@ -1,6 +1,6 @@
 # LLM/VLM C++ ONNX Inference
 
-- 모든 동작은 AWS의 `Ubuntu Server 24.04 LTS (HVM),EBS General Purpose (SSD) Volume Type.` Amazon Machine Image, `t2.2xlarge` Instance Type, 30GiB Storage 환경을 기준으로 합니다.
+- 모든 동작은 AWS의 `Ubuntu Server 24.04 LTS (HVM),EBS General Purpose (SSD) Volume Type.` Amazon Machine Image, `t2.2xlarge` Instance Type, 60GiB Storage 환경을 기준으로 합니다.
 - Docker가 설치되어 있고, 메모리 16GB Storage 30GB 이상이 확보되는 경우에는 MAC이나 다른 환경에서도 동작 가능할 것으로 예상되나, 제대로 테스트되지는 않았습니다.
 
 ## Docker 개발 & 실행 환경
@@ -15,21 +15,15 @@ $ ... # 컨테이너 내부 자동 진입, 호스트 파일 변경 실시간 반
 sudo docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ```
 
-## 사전 작업
+## 사전 작업 및 과제 실행
 Docker 컨테이너 내에서:
 ```bash
-# problem1, 3 baseline 실행을 위해 필요
-git clone https://huggingface.co/geonmin-kim/llm_vlm_onnx_sample
-cd llm_vlm_onnx_sample
-git lfs pull
-cd ..
-# problem2 baseline 실행을 위해 필요
-# google/gemma-3-1b-it 모델 사용 허가를 받은 후 Hugging Face 토큰으로 로그인
-hf auth login
-```
+# 예제 허깅페이스 레포 다운로드 (problem1, 3용)
+./setup.sh
 
-## 과제 실행 (예시 결과물은 `stdout.txt` 참고)
-```bash
+# problem2용 - Hugging Face 토큰 설정
+export HF_TOKEN=your_huggingface_token_here
+
 # 문제 1: LLM 텍스트 생성
 cd problem1-llm
 ./run.sh
