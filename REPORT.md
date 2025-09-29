@@ -53,17 +53,15 @@
 - **ONNX 기반 LLM 추론 엔진** (problem1-llm/main.cpp)
 - **메모리 연산 최적화**: KV cache에서 move 활용으로 불필요한 복사 제거
 
-**성능 비교:**
-
 **결과:**
 - **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
 - **성능 비교**: Python과 C++이 거의 비슷한 성능을 보이는 것으로 보임
 
-| 지표 | Python Baseline | C++ Implementation | 개선율 |
-|------|----------------|-------------------|--------|
-| TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
-| TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
-| Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
+    | 지표 | Python Baseline | C++ Implementation | 개선율 |
+    |------|----------------|-------------------|--------|
+    | TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
+    | TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
+    | Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
 
 
 **향후 개선 방안:**
@@ -151,8 +149,6 @@
     that it is likely a densely populated urban area. **The night view of the city also adds to**
     **the atmosphere, making it a visually appealing scene.**"
 
----
-
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
 |------|----------------|-------------------|--------|
@@ -163,6 +159,8 @@
 **향후 계획:**
 - **모델 입출력 타입 단일화**: 모든 모델들이 f16을 사용하도록 양자화 하거나, text embedding 모델이 f32 출력을 만들도록 변경 고려.
 - **메모리 연산 최적화**: text embedding, image embedding 합칠 때, 더 효율적으로 진행하는 방법 고려
+
+---
 
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
