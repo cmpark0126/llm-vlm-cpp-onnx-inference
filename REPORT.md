@@ -4,7 +4,6 @@
 
 ### Problem 1: LLM 추론 성능 비교 (C++ vs Python)
 - **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
-    - C++ ONNX Runtime이 유효하게 동작함
 
 - **성능 비교**: Python과 C++이 거의 비슷한 성능을 보이는 것으로 보임
 
@@ -16,7 +15,6 @@
 
 ### Problem 2: Static Graph 추론 성능 비교 (C++ vs Python)
 - **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
-    - 주어진 프롬프트에 대해 Static Graph가 기존 동적 그래프와 같은 동작을 보임
 
 - **성능 비교**: Prefill 호출 부분에 비효율적인 부분이 있는 듯 보임, Prefill, Decode 모델의 공통 부분을 제각기 로드하여 메모리 활용률이 매우 떨어짐
 
