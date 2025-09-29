@@ -36,6 +36,33 @@ def update_cache(
     return updated_key_cache, updated_value_cache
 
 
+@torch.jit.script
+def create_sliding_window_mask(
+    cache_position: torch.Tensor,
+    sliding_window: int,
+    cache_length: int
+) -> torch.Tensor:
+    # ONNX 호환 sliding window mask 생성 (TorchScript 최적화)
+    current_pos = cache_position.squeeze()  # 스칼라로 변환
+
+    # 전체 위치 인덱스 생성
+    positions = torch.arange(cache_length, dtype=torch.long, device=cache_position.device)
+
+    # Sliding window 범위 계산
+    window_start = torch.clamp(current_pos + 1 - sliding_window, min=0)
+    window_end = current_pos + 1
+
+    # 마스크 생성: window 범위 내는 0.0, 밖은 -inf
+    mask = torch.where(
+        (positions >= window_start) & (positions < window_end),
+        torch.tensor(0.0, dtype=torch.float32, device=cache_position.device),
+        torch.tensor(float("-inf"), dtype=torch.float32, device=cache_position.device)
+    )
+
+    # [1, 1, 1, cache_length] 형태로 변환
+    return mask.view(1, 1, 1, cache_length)
+
+
 class TempCache:
     # Decode 단계용 KV Cache 관리자
 
@@ -75,6 +102,31 @@ class StaticGemmaDecode(nn.Module):
         self.rotary_emb_local = original_model.model.rotary_emb_local  # 지역 위치 인코딩
         self.lm_head = original_model.lm_head  # 언어 모델 헤드
 
+        # Sliding window 설정 확인
+        assert self.config.sliding_window is not None, "Sliding window must be set"
+
+    def _create_input_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
+        # 패딩 마스크를 4D additive mask로 변환 (decode용: [1, 1, 1, cache_length])
+        layer_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+
+        # Additive mask로 변환 (0은 주의할 수 있음, -inf는 무시)
+        inverted_mask = 1.0 - layer_attention_mask
+        layer_attention_mask = inverted_mask.masked_fill(
+            inverted_mask.to(torch.bool), float("-inf")
+        )
+
+        return layer_attention_mask
+
+    def _create_sliding_attention_mask(self, input_attention_mask: torch.Tensor, cache_position: torch.Tensor) -> torch.Tensor:
+        # ONNX 호환 sliding window mask 생성
+        sliding_mask = create_sliding_window_mask(
+            cache_position,
+            self.config.sliding_window,
+            self.cache_length
+        )
+
+        return input_attention_mask + sliding_mask
+
 
     def forward(self, input_ids: torch.LongTensor, position_ids: torch.LongTensor,
                 attention_mask: torch.Tensor, cache_position: torch.Tensor,
@@ -105,13 +157,28 @@ class StaticGemmaDecode(nn.Module):
         # 3. 토큰 임베딩
         inputs_embeds = self.embed_tokens(input_ids)
 
-        # 4. 위치 인코딩 생성
+        # 4. Attention mask 생성
+        input_attention_mask = self._create_input_attention_mask(attention_mask)
+
+        # Full attention mask: 모든 과거 토큰 허용
+        full_attention_mask = input_attention_mask  # 패딩 마스크만 적용
+
+        # Sliding window mask 생성
+        sliding_attention_mask = self._create_sliding_attention_mask(input_attention_mask, cache_position)
+
+        # 레이어 타입별 마스크 매핑
+        causal_mask_mapping = {
+            "full_attention": full_attention_mask,
+            "sliding_attention": sliding_attention_mask,
+        }
+
+        # 5. 위치 인코딩 생성
         hidden_states = inputs_embeds
         # RoPE 적용
         position_embeddings_global = self.rotary_emb(hidden_states, position_ids)
         position_embeddings_local = self.rotary_emb_local(hidden_states, position_ids)
 
-        # 5. Transformer 레이어들 순차 처리
+        # 6. Transformer 레이어들 순차 처리
         all_kv_caches = []
 
         for layer_idx, decoder_layer in enumerate(self.layers):
@@ -125,21 +192,15 @@ class StaticGemmaDecode(nn.Module):
                 current_length=cache_position
             )
 
-            # Attention mask 형태 변환
-            layer_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-
-            # Additive mask로 변환
-            inverted_mask = 1.0 - layer_attention_mask
-            layer_attention_mask = inverted_mask.masked_fill(
-                inverted_mask.to(torch.bool), float("-inf")
-            )
+            # 레이어별 attention mask 선택
+            attention_mask_for_layer = causal_mask_mapping[decoder_layer.attention_type]
 
             # 레이어 순전파 수행
             outputs = decoder_layer(
                 hidden_states,
                 position_embeddings_global=position_embeddings_global,
                 position_embeddings_local=position_embeddings_local,
-                attention_mask=layer_attention_mask,
+                attention_mask=attention_mask_for_layer,
                 position_ids=position_ids,
                 past_key_values=kv_cache,  # 업데이트될 KV cache
                 output_attentions=False,
@@ -153,14 +214,14 @@ class StaticGemmaDecode(nn.Module):
             # 업데이트된 KV cache 저장 (새로운 토큰 정보가 추가됨)
             all_kv_caches.append((kv_cache.key_states, kv_cache.value_states))
 
-        # === 6단계: 최종 정규화 ===
+        # 7. 최종 정규화
         hidden_states = self.norm(hidden_states)
 
-        # === 7단계: Logits 생성 ===
+        # 8. Logits 생성
         # 어휘 사전 크기로 투영하여 다음 토큰 확률 계산
         logits = self.lm_head(hidden_states)
 
-        # 8. ONNX 호환 출력 변환
+        # 9. ONNX 호환 출력 변환
         flattened_outputs = [logits]
 
         for k_cache, v_cache in all_kv_caches:
