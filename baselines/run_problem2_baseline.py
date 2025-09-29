@@ -78,8 +78,6 @@ def run_decode_loop(
     print("Starting decode loop...")
     print(tokenizer.decode(next_token.item()), end="", flush=True)
 
-    first_token_time = None
-    first_token_generated = False
     peak_memory = process.memory_info().rss
     generated_tokens = 0
 
@@ -95,11 +93,6 @@ def run_decode_loop(
         # 다음 토큰 예측
         next_token_logits = outputs.logits[:, -1, :]
         next_token = torch.argmax(next_token_logits, dim=-1).unsqueeze(-1)
-
-        # 첫 번째 토큰 시간 기록 (TTFT)
-        if not first_token_generated:
-            first_token_time = time.time()
-            first_token_generated = True
 
         # 메모리 사용량 업데이트
         current_memory = process.memory_info().rss
@@ -117,7 +110,7 @@ def run_decode_loop(
         # 스트리밍 출력
         print(tokenizer.decode(next_token[0]), end="", flush=True)
 
-    return first_token_time, peak_memory, generated_tokens
+    return peak_memory, generated_tokens
 
 def execute_split_model(tokenizer, model, inputs):
     """
@@ -136,10 +129,11 @@ def execute_split_model(tokenizer, model, inputs):
     # Prefill 단계
     print("=== PREFILL PHASE ===")
     next_token, past_key_values = run_prefill(model, input_ids, attention_mask)
+    first_token_time = time.time()
 
     # Decode 루프
     print("=== DECODE PHASE ===")
-    first_token_time, peak_memory, generated_tokens = run_decode_loop(
+    peak_memory, generated_tokens = run_decode_loop(
         model,
         tokenizer,
         next_token,

@@ -139,18 +139,18 @@ int main() {
 
     LlmTokenizer tokenizer(path_to_tokenizer);
 
-    // Generation loop with performance measurements
-    std::vector<int64_t> generated_tokens;
-    int64_t generation_start_ms = get_time_ms();
-    int64_t first_token_time_ms = 0;
-    bool first_token_generated = false;
-
     // 2. Prepare inputs
     std::string prompt =
         "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about "
         "Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
     std::string preprocessed_prompt = tokenizer.preprocess(prompt);
     auto current_input_ids = tokenizer.encode(preprocessed_prompt);
+
+    // Generation loop with performance measurements
+    std::vector<int64_t> generated_tokens;
+    int64_t generation_start_ms = get_time_ms();
+    int64_t first_token_time_ms = 0;
+    bool first_token_generated = false;
 
     // position_ids = [1, 2, 3, ..., seq_len]
     int seq_len = current_input_ids.size();

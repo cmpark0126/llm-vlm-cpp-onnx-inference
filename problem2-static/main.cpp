@@ -424,7 +424,8 @@ int main() {
     std::cout << "Time-Per-Output-Token (TPOT): " << tpot_ms << " ms" << std::endl;
     std::cout << "Peak Memory Usage: " << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
     std::cout << "Total Generation Time: " << total_time_ms << " ms" << std::endl;
-    std::cout << "Total Tokens Generated: " << tokens_generated << std::endl;
+    // +1 because we don't count the first token
+    std::cout << "Total Tokens Generated: " << tokens_generated + 1 << std::endl;
 
     return 0;
 }

@@ -123,6 +123,7 @@ the atmosphere, making it a visually appealing scene."
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
 - Peak Memory Usage: [getrusage(2)](https://man7.org/linux/man-pages/man2/getrusage.2.html)
+- C++ 코드 작성에는 Claude Code를 많이 활용했습니다. 모든 코드는 직접 읽어보고 디버깅을 진행했습니다.
 
 ## TODO
 - python과의 성능 비교가 정확히 같은 부분을 비교하도록 구현되어있는 것이 맞는지 점검. 성능 측정에 tokenizing은 제외할 것 

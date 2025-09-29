@@ -34,38 +34,32 @@ def main(args):
     initial_memory = process.memory_info().rss
     peak_memory = initial_memory
 
-    # Start total generation timing
-    total_generation_start = time.time()
-
     # C++ 구현의 결과와 비교하기 위해 C++ 구현과 동일한 prompt 사용
     prompt = f"<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n"
+    input_ids = tokenizer(prompt)["input_ids"]
+    pixel_value = process_image(args.image_path)
 
     # Update memory after prefill
-    past_kv_values, first_token, input_token_len, prefill_time = prefill(args, tokenizer, prompt)
+    generation_start_time = time.time()
+    past_kv_values, first_token, input_token_len = prefill(input_ids, pixel_value)
+    first_token_time = time.time()
     current_memory = process.memory_info().rss
     if current_memory > peak_memory:
         peak_memory = current_memory
 
-    # Run decode and get performance metrics
-    decode_metrics = decode(args, tokenizer, past_kv_values, first_token, input_token_len)
-
+    num_generated_tokens = decode(args, tokenizer, past_kv_values, first_token, input_token_len)
+    decode_end_ms = time.time()
     # Update memory after decode
     current_memory = process.memory_info().rss
     if current_memory > peak_memory:
         peak_memory = current_memory
 
     # Calculate total generation time
-    total_generation_end = time.time()
-    total_generation_time_ms = (total_generation_end - total_generation_start) * 1000
-
-    # Extract decode metrics and calculate TTFT/TPOT
-    # TTFT for VLM = prefill time (time to process image+text and get first token)
-    ttft_ms = prefill_time * 1000
+    total_generation_time_ms = (decode_end_ms - generation_start_time) * 1000
+    ttft_ms = (first_token_time - generation_start_time) * 1000
 
     # TPOT = decode time per token (excluding the first token from prefill)
-    decode_time_ms = decode_metrics['total_decode_time_ms']
-    num_generated_tokens = decode_metrics['num_generated_tokens']
-    tpot_ms = decode_time_ms / (num_generated_tokens - 1) 
+    tpot_ms = (total_generation_time_ms - ttft_ms) / (num_generated_tokens - 1)
 
     # Get peak memory usage in MB
     peak_memory_mb = peak_memory / 1024.0 / 1024.0
@@ -160,14 +154,10 @@ def top_p_sampling(last_logits, top_p=0.99):
 # Outputs
 ## logits: [1, seq_len, 151936]
 ## present: each layer returns key[1, 2, seq_len, kv_dim], value[1, 2, seq_len, kv_dim] => total 56 kv
-def prefill(args, tokenizer, input_prompt):
+def prefill(input_ids, pixel_value):
     print("Running prefill step...")
-    prefill_start = time.time()
 
-    input_ids = tokenizer(input_prompt)["input_ids"]
     image_token_pos = input_ids.index(IMAGE_TOKEN_INDEX)
-
-    pixel_value = process_image(args.image_path)
 
     # Get image embedding & Project image embedding to text embedding space
     image_emb_output = image_emb_session.run(None, {"pixel_values": pixel_value})
@@ -210,11 +200,7 @@ def prefill(args, tokenizer, input_prompt):
     else:
         next_token = prefill_outputs[0].argmax(-1)[0][-1]
 
-    prefill_done = time.time()
-    prefill_time = prefill_done - prefill_start
-    print(f"Prefill step done. Throughtput: {input_token_len/prefill_time:0.2f} token/sec")
-
-    return past_kv_values, next_token, input_token_len, prefill_time
+    return past_kv_values, next_token, input_token_len
 
 
 # Generation step
@@ -226,11 +212,10 @@ def prefill(args, tokenizer, input_prompt):
 ## present: each layer returns key[1, 2, seq_len, kv_dim], value[1, 2, seq_len, kv_dim] => total 56 kv
 def decode(args, tokenizer, past_kv_values, first_token, input_token_len):
     print("Runing decode step...", end="\n\n")
-    decode_start = time.time()
-
     generated_ids = [first_token]
     next_token = first_token
 
+    num_generated_tokens = 1
     for last_token_id in range(MAX_GEN_LEN):
         embedding_output = text_emb_session.run(None, {"input_ids": [[next_token]]})
 
@@ -257,6 +242,7 @@ def decode(args, tokenizer, past_kv_values, first_token, input_token_len):
 
         # Save kv values for next step
         past_kv_values = decoding_outputs[1:]
+        num_generated_tokens += 1
 
         # Get next token with top_p sampling
         last_logits = decoding_outputs[0][0][-1]
@@ -275,19 +261,11 @@ def decode(args, tokenizer, past_kv_values, first_token, input_token_len):
     decode_done = time.time()
     response = tokenizer.decode(generated_ids)
 
-    # Calculate performance metrics
-    total_decode_time_ms = (decode_done - decode_start) * 1000
-    num_generated_tokens = len(generated_ids)
-
     print(f"Response: {response}")
     with open(args.output_path, 'w') as f:
         f.write(response)
-    print(f"\nDecode step done. Throughtput: {last_token_id/(decode_done - decode_start):0.2f} token/sec")
 
-    return {
-        'num_generated_tokens': num_generated_tokens,
-        'total_decode_time_ms': total_decode_time_ms
-    }
+    return num_generated_tokens
 
 
 if __name__ == "__main__":
