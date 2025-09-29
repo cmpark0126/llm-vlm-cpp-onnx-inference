@@ -37,61 +37,23 @@ size_t get_peak_memory_usage() {
     return usage.ru_maxrss * 1024;  // convert KB to bytes
 }
 
-int main() {
-    std::cout << "Problem 2: Static ONNX Inference" << std::endl;
 
-    std::string tokenizer_path = "../../llm_vlm_onnx_sample/llm/tokenizer";
-
-    std::string prompt =
-        "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about "
-        "Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
-
-    LlmTokenizer tokenizer(tokenizer_path);
-
-    std::string preprocessed_prompt = tokenizer.preprocess(prompt);
-    auto input_ids = tokenizer.encode(preprocessed_prompt);
-
+std::pair<int64_t, std::vector<Ort::Value>> run_prefill(Ort::Session& prefill_session,
+                                                        const std::vector<int64_t>& input_ids,
+                                                        const std::vector<int64_t>& attention_mask,
+                                                        const std::vector<int64_t>& position_ids,
+                                                        int original_seq_len,
+                                                        const Ort::MemoryInfo& memory_info) {
     int batch_size = 1;
-    int original_seq_len = input_ids.size();
-
-    input_ids.resize(PREFILL_SEQ_LEN, 0);
-
-    std::vector<int64_t> attention_mask;
-    for (int i = 0; i < PREFILL_SEQ_LEN; i++) {
-        attention_mask.push_back(input_ids[i] != 0 ? 1 : 0);
-    }
-
-    std::vector<int64_t> position_ids;
-    for (int i = 1; i <= PREFILL_SEQ_LEN; i++) {
-        position_ids.push_back(i);
-    }
-
-    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "StaticGemmaInference");
-    Ort::SessionOptions session_options;
-
-    bool unload_prefill = get_unload_prefill_before_decode();
-
-    std::string prefill_model_path = "../gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx";
-    std::unique_ptr<Ort::Session> prefill_session =
-        std::make_unique<Ort::Session>(env, prefill_model_path.c_str(), session_options);
-
-    std::string decode_model_path = "../gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx";
-    std::unique_ptr<Ort::Session> decode_session = nullptr;
-
-    if (!unload_prefill) {
-        decode_session =
-            std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
-    }
-    auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::vector<int64_t> input_shape = {batch_size, PREFILL_SEQ_LEN};
 
     auto input_ids_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, input_ids.data(), input_ids.size(), input_shape.data(), input_shape.size());
+        memory_info, const_cast<int64_t*>(input_ids.data()), input_ids.size(), input_shape.data(), input_shape.size());
     auto attention_mask_tensor =
-        Ort::Value::CreateTensor<int64_t>(memory_info, attention_mask.data(), attention_mask.size(),
+        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(attention_mask.data()), attention_mask.size(),
                                           input_shape.data(), input_shape.size());
     auto position_ids_tensor =
-        Ort::Value::CreateTensor<int64_t>(memory_info, position_ids.data(), position_ids.size(),
+        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(position_ids.data()), position_ids.size(),
                                           input_shape.data(), input_shape.size());
 
     std::vector<const char*> input_names = {"input_ids", "attention_mask", "position_ids"};
@@ -99,19 +61,20 @@ int main() {
     input_values.push_back(std::move(input_ids_tensor));
     input_values.push_back(std::move(attention_mask_tensor));
     input_values.push_back(std::move(position_ids_tensor));
+
     Ort::AllocatorWithDefaultOptions allocator;
-    size_t output_count = prefill_session->GetOutputCount();
+    size_t output_count = prefill_session.GetOutputCount();
     std::vector<const char*> output_names(output_count);
     std::vector<std::string> output_names_storage(output_count);
 
     for (size_t i = 0; i < output_count; ++i) {
-        auto output_name_allocated = prefill_session->GetOutputNameAllocated(i, allocator);
+        auto output_name_allocated = prefill_session.GetOutputNameAllocated(i, allocator);
         output_names_storage[i] = std::string(output_name_allocated.get());
         output_names[i] = output_names_storage[i].c_str();
     }
 
     auto outputs =
-        prefill_session->Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
+        prefill_session.Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
                              input_values.size(), output_names.data(), output_names.size());
 
     auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
@@ -130,26 +93,15 @@ int main() {
         }
     }
 
-    if (unload_prefill) {
-        prefill_session.reset();
-        decode_session =
-            std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
-    }
+    return std::make_pair(next_token_id, std::move(outputs));
+}
 
-    int64_t current_token = next_token_id;
-    int64_t current_position = original_seq_len + 1;
+std::pair<std::vector<Ort::Value>, std::vector<std::vector<float>>> prepare_kv_cache_for_decode(
+    const std::vector<Ort::Value>& prefill_outputs,
+    int original_seq_len,
+    const Ort::MemoryInfo& memory_info) {
 
-    std::vector<int64_t> decode_input_ids = {current_token};
-    std::vector<int64_t> decode_position_ids = {current_position};
-
-    std::vector<int64_t> decode_attention_mask(MAX_SEQ_LEN, 0);
-    for (int i = 0; i < current_position; i++) {
-        decode_attention_mask[i] = 1;
-    }
-
-    int num_layers = (outputs.size() - 1) / 2;
-
-    // Create padded KV cache tensors for decode (1024 size)
+    int num_layers = (prefill_outputs.size() - 1) / 2;
     std::vector<std::vector<float>> kv_cache_storage;
     std::vector<Ort::Value> past_kv_tensors;
 
@@ -158,8 +110,8 @@ int main() {
         int key_output_idx = 1 + layer_idx * 2;
         int value_output_idx = 1 + layer_idx * 2 + 1;
 
-        auto& key_tensor = outputs[key_output_idx];
-        auto& value_tensor = outputs[value_output_idx];
+        auto& key_tensor = prefill_outputs[key_output_idx];
+        auto& value_tensor = prefill_outputs[value_output_idx];
 
         auto key_shape = key_tensor.GetTensorTypeAndShapeInfo().GetShape();
         auto value_shape = value_tensor.GetTensorTypeAndShapeInfo().GetShape();
@@ -224,6 +176,28 @@ int main() {
         past_kv_tensors.push_back(std::move(padded_value_tensor));
     }
 
+    return std::make_pair(std::move(past_kv_tensors), std::move(kv_cache_storage));
+}
+
+size_t run_decode_loop(Ort::Session& decode_session,
+                      LlmTokenizer& tokenizer,
+                      int64_t initial_token,
+                      int original_seq_len,
+                      std::vector<Ort::Value>&& kv_cache,
+                      const Ort::MemoryInfo& memory_info) {
+    int64_t current_token = initial_token;
+    int64_t current_position = original_seq_len + 1;
+
+    std::vector<int64_t> decode_input_ids = {current_token};
+    std::vector<int64_t> decode_position_ids = {current_position};
+
+    std::vector<int64_t> decode_attention_mask(MAX_SEQ_LEN, 0);
+    for (int i = 0; i < current_position; i++) {
+        decode_attention_mask[i] = 1;
+    }
+
+    int num_layers = kv_cache.size() / 2;  // Each layer has key and value tensors
+
     // Create decode input tensors
     std::vector<int64_t> decode_input_shape = {1, 1};
     std::vector<int64_t> decode_attention_shape = {1, MAX_SEQ_LEN};
@@ -268,22 +242,18 @@ int main() {
     decode_input_values.push_back(std::move(decode_position_tensor));
     decode_input_values.push_back(std::move(decode_attention_tensor));
     decode_input_values.push_back(std::move(cache_position_tensor));
-    for (auto& kv_tensor : past_kv_tensors) {
+    for (auto& kv_tensor : kv_cache) {
         decode_input_values.push_back(std::move(kv_tensor));
     }
 
-    if (decode_input_values.size() != decode_input_names.size()) {
-        std::cerr << "Error: Input names and values count mismatch!" << std::endl;
-        return 1;
-    }
-
     // Get decode output names
-    size_t decode_output_count = decode_session->GetOutputCount();
+    Ort::AllocatorWithDefaultOptions allocator;
+    size_t decode_output_count = decode_session.GetOutputCount();
     std::vector<const char*> decode_output_names(decode_output_count);
     std::vector<std::string> decode_output_names_storage(decode_output_count);
 
     for (size_t i = 0; i < decode_output_count; ++i) {
-        auto output_name_allocated = decode_session->GetOutputNameAllocated(i, allocator);
+        auto output_name_allocated = decode_session.GetOutputNameAllocated(i, allocator);
         decode_output_names_storage[i] = std::string(output_name_allocated.get());
         decode_output_names[i] = decode_output_names_storage[i].c_str();
     }
@@ -291,9 +261,6 @@ int main() {
     const std::vector<int64_t> EOS_TOKEN_IDS = {1, 106};
 
     std::vector<int64_t> generated_tokens;
-    int64_t generation_start_ms = get_time_ms();
-    int64_t first_token_time_ms = 0;
-    bool first_token_generated = false;
 
     std::string first_token_text = tokenizer.decode(current_token);
     if (first_token_text.find("<") == std::string::npos &&
@@ -302,7 +269,7 @@ int main() {
     }
 
     for (int i = 0; i < MAX_SEQ_LEN - 1; i++) {
-        auto decode_outputs = decode_session->Run(
+        auto decode_outputs = decode_session.Run(
             Ort::RunOptions{nullptr}, decode_input_names.data(), decode_input_values.data(),
             decode_input_values.size(), decode_output_names.data(), decode_output_names.size());
 
@@ -337,11 +304,6 @@ int main() {
         }
 
         generated_tokens.push_back(decode_next_token);
-
-        if (!first_token_generated) {
-            first_token_time_ms = get_time_ms();
-            first_token_generated = true;
-        }
 
         current_token = decode_next_token;
         current_position++;
@@ -378,11 +340,82 @@ int main() {
         }
     }
 
-    int64_t generation_end_ms = get_time_ms();
-    double total_generation_time_ms = generation_end_ms - generation_start_ms;
+    return generated_tokens.size();
+}
 
-    double ttft_ms = first_token_time_ms - generation_start_ms;
-    double tpot_ms = (total_generation_time_ms - ttft_ms) / (generated_tokens.size() - 1);
+int main() {
+    std::cout << "Problem 2: Static ONNX Inference" << std::endl;
+
+    std::string tokenizer_path = "../../llm_vlm_onnx_sample/llm/tokenizer";
+
+    std::string prompt =
+        "<bos><start_of_turn>user\nYou are a helpful assistant.\n\nWrite me a short poem about "
+        "Machine Learning.<end_of_turn>\n<start_of_turn>model\n";
+
+    LlmTokenizer tokenizer(tokenizer_path);
+
+    std::string preprocessed_prompt = tokenizer.preprocess(prompt);
+    auto input_ids = tokenizer.encode(preprocessed_prompt);
+
+    int batch_size = 1;
+    int original_seq_len = input_ids.size();
+
+    input_ids.resize(PREFILL_SEQ_LEN, 0);
+
+    std::vector<int64_t> attention_mask;
+    for (int i = 0; i < PREFILL_SEQ_LEN; i++) {
+        attention_mask.push_back(input_ids[i] != 0 ? 1 : 0);
+    }
+
+    std::vector<int64_t> position_ids;
+    for (int i = 1; i <= PREFILL_SEQ_LEN; i++) {
+        position_ids.push_back(i);
+    }
+
+    Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "StaticGemmaInference");
+    Ort::SessionOptions session_options;
+
+    bool unload_prefill = get_unload_prefill_before_decode();
+
+    std::string prefill_model_path = "../gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx";
+    std::unique_ptr<Ort::Session> prefill_session =
+        std::make_unique<Ort::Session>(env, prefill_model_path.c_str(), session_options);
+
+    std::string decode_model_path = "../gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx";
+    std::unique_ptr<Ort::Session> decode_session = nullptr;
+
+    if (!unload_prefill) {
+        decode_session =
+            std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
+    }
+    auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+    // Run prefill phase
+    int64_t prefill_start_ms = get_time_ms();
+    auto [next_token_id, prefill_outputs] = run_prefill(*prefill_session, input_ids, attention_mask, position_ids,
+                                                        original_seq_len, memory_info);
+    int64_t prefill_end_ms = get_time_ms();
+
+    if (unload_prefill) {
+        prefill_session.reset();
+        decode_session =
+            std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
+    }
+
+    // Prepare KV cache for decode phase
+    auto [past_kv_tensors, kv_cache_storage] = prepare_kv_cache_for_decode(prefill_outputs, original_seq_len, memory_info);
+
+    // Run decode loop phase
+    int64_t decode_start_ms = get_time_ms();
+    size_t tokens_generated = run_decode_loop(*decode_session, tokenizer, next_token_id,
+                                             original_seq_len, std::move(past_kv_tensors), memory_info);
+    int64_t decode_end_ms = get_time_ms();
+
+    // Calculate and output performance metrics
+    double ttft_ms = prefill_end_ms - prefill_start_ms;  // Time to first token (prefill time)
+    double decode_time_ms = decode_end_ms - decode_start_ms;
+    double tpot_ms = decode_time_ms / tokens_generated;
+    double total_time_ms = ttft_ms + decode_time_ms;
 
     size_t peak_memory = get_peak_memory_usage();
 
@@ -390,8 +423,8 @@ int main() {
     std::cout << "Time-to-First-Token (TTFT): " << ttft_ms << " ms" << std::endl;
     std::cout << "Time-Per-Output-Token (TPOT): " << tpot_ms << " ms" << std::endl;
     std::cout << "Peak Memory Usage: " << (peak_memory / 1024.0 / 1024.0) << " MB" << std::endl;
-    std::cout << "Total Generation Time: " << total_generation_time_ms << " ms" << std::endl;
-    std::cout << "Total Tokens Generated: " << generated_tokens.size() << std::endl;
+    std::cout << "Total Generation Time: " << total_time_ms << " ms" << std::endl;
+    std::cout << "Total Tokens Generated: " << tokens_generated << std::endl;
 
     return 0;
 }
