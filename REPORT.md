@@ -74,16 +74,15 @@
   - Static ONNX graph 추출 전 베이스라인 확보
   - Problem1과 동일한 입력으로 결과 검증
   - C++ 구현과의 정확한 비교를 위해 샘플링을 비활성화한 출력 생성
-- **Prefill&Decode Static ONNX Graph 추출:**
-  - `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM` 구현 참고
-  - KV Cache 구현은 `transformers/cache_utils.py`의 `Cache` 인터페이스를 duck typing으로 처리
-  - Prefill과 Decode 각각의 특성에 맞춰 별도 구현
-    - sliding window 구현
-      - Prefill: 128 sequence length로 sliding window 미구현 (베이스라인 512보다 작음)
-      - Decode: 1024 sequence length로 sliding window 구현
-    - KV Cache 구현
-      - Prefill: 런타임에 KV Cache 생성하여 TempCache가 업데이트 결과를 직접 반환
-      - Decode: 이전 KV Cache에 새로운 KV Cache를 업데이트하는 구조 구현
+- **Prefill & Decode Static ONNX Graph 추출:**
+  - **참고 구현**: `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM`
+  - **KV Cache 처리**: `transformers/cache_utils.py`의 `Cache::update` 인터페이스를 duck typing으로 구현
+
+  **모델 별 구현 차이:**
+  | 특성 | Prefill 모델 | Decode 모델 |
+  |------|-------------|------------|
+  | **Sliding Window 구현 여부** | 미구현 (max sequence length(128) < sliding window(512)) | 구현 (max sequence length(1024) > sliding window(512)) |
+  | **KV Cache 처리** | 런타임에 생성되는 것을 저장하고 이를 반환하도록 | 입력 KV Cache Padding 공간에 새로운 KV Cache를 복사하고, 이전 cache와 새로운 cache가 모두 쓰인 것을 반환 |
 - **LLM Tokenizer 재사용:**
   - Problem 1에서 구현한 동일한 Tokenizer 활용
 - **개발 환경 메모리 제약 대응:**
