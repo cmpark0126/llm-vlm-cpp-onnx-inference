@@ -37,7 +37,6 @@ size_t get_peak_memory_usage() {
     return usage.ru_maxrss * 1024;  // convert KB to bytes
 }
 
-
 std::pair<int64_t, std::vector<Ort::Value>> run_prefill(Ort::Session& prefill_session,
                                                         const std::vector<int64_t>& input_ids,
                                                         const std::vector<int64_t>& attention_mask,
@@ -47,14 +46,15 @@ std::pair<int64_t, std::vector<Ort::Value>> run_prefill(Ort::Session& prefill_se
     int batch_size = 1;
     std::vector<int64_t> input_shape = {batch_size, PREFILL_SEQ_LEN};
 
-    auto input_ids_tensor = Ort::Value::CreateTensor<int64_t>(
-        memory_info, const_cast<int64_t*>(input_ids.data()), input_ids.size(), input_shape.data(), input_shape.size());
-    auto attention_mask_tensor =
-        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(attention_mask.data()), attention_mask.size(),
-                                          input_shape.data(), input_shape.size());
-    auto position_ids_tensor =
-        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(position_ids.data()), position_ids.size(),
-                                          input_shape.data(), input_shape.size());
+    auto input_ids_tensor =
+        Ort::Value::CreateTensor<int64_t>(memory_info, const_cast<int64_t*>(input_ids.data()),
+                                          input_ids.size(), input_shape.data(), input_shape.size());
+    auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, const_cast<int64_t*>(attention_mask.data()), attention_mask.size(),
+        input_shape.data(), input_shape.size());
+    auto position_ids_tensor = Ort::Value::CreateTensor<int64_t>(
+        memory_info, const_cast<int64_t*>(position_ids.data()), position_ids.size(),
+        input_shape.data(), input_shape.size());
 
     std::vector<const char*> input_names = {"input_ids", "attention_mask", "position_ids"};
     std::vector<Ort::Value> input_values;
@@ -75,7 +75,7 @@ std::pair<int64_t, std::vector<Ort::Value>> run_prefill(Ort::Session& prefill_se
 
     auto outputs =
         prefill_session.Run(Ort::RunOptions{nullptr}, input_names.data(), input_values.data(),
-                             input_values.size(), output_names.data(), output_names.size());
+                            input_values.size(), output_names.data(), output_names.size());
 
     auto logits_shape = outputs[0].GetTensorTypeAndShapeInfo().GetShape();
     const float* logits_data = outputs[0].GetTensorData<float>();
@@ -97,10 +97,8 @@ std::pair<int64_t, std::vector<Ort::Value>> run_prefill(Ort::Session& prefill_se
 }
 
 std::pair<std::vector<Ort::Value>, std::vector<std::vector<float>>> prepare_kv_cache_for_decode(
-    const std::vector<Ort::Value>& prefill_outputs,
-    int original_seq_len,
+    const std::vector<Ort::Value>& prefill_outputs, int original_seq_len,
     const Ort::MemoryInfo& memory_info) {
-
     int num_layers = (prefill_outputs.size() - 1) / 2;
     std::vector<std::vector<float>> kv_cache_storage;
     std::vector<Ort::Value> past_kv_tensors;
@@ -179,12 +177,9 @@ std::pair<std::vector<Ort::Value>, std::vector<std::vector<float>>> prepare_kv_c
     return std::make_pair(std::move(past_kv_tensors), std::move(kv_cache_storage));
 }
 
-size_t run_decode_loop(Ort::Session& decode_session,
-                      LlmTokenizer& tokenizer,
-                      int64_t initial_token,
-                      int original_seq_len,
-                      std::vector<Ort::Value>&& kv_cache,
-                      const Ort::MemoryInfo& memory_info) {
+size_t run_decode_loop(Ort::Session& decode_session, LlmTokenizer& tokenizer, int64_t initial_token,
+                       int original_seq_len, std::vector<Ort::Value>&& kv_cache,
+                       const Ort::MemoryInfo& memory_info) {
     int64_t current_token = initial_token;
     int64_t current_position = original_seq_len + 1;
 
@@ -392,8 +387,8 @@ int main() {
 
     // Run prefill phase
     int64_t prefill_start_ms = get_time_ms();
-    auto [next_token_id, prefill_outputs] = run_prefill(*prefill_session, input_ids, attention_mask, position_ids,
-                                                        original_seq_len, memory_info);
+    auto [next_token_id, prefill_outputs] = run_prefill(
+        *prefill_session, input_ids, attention_mask, position_ids, original_seq_len, memory_info);
     int64_t prefill_end_ms = get_time_ms();
 
     if (unload_prefill) {
@@ -403,12 +398,14 @@ int main() {
     }
 
     // Prepare KV cache for decode phase
-    auto [past_kv_tensors, kv_cache_storage] = prepare_kv_cache_for_decode(prefill_outputs, original_seq_len, memory_info);
+    auto [past_kv_tensors, kv_cache_storage] =
+        prepare_kv_cache_for_decode(prefill_outputs, original_seq_len, memory_info);
 
     // Run decode loop phase
     int64_t decode_start_ms = get_time_ms();
-    size_t tokens_generated = run_decode_loop(*decode_session, tokenizer, next_token_id,
-                                             original_seq_len, std::move(past_kv_tensors), memory_info);
+    size_t tokens_generated =
+        run_decode_loop(*decode_session, tokenizer, next_token_id, original_seq_len,
+                        std::move(past_kv_tensors), memory_info);
     int64_t decode_end_ms = get_time_ms();
 
     // Calculate and output performance metrics

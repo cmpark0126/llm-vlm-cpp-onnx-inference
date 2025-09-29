@@ -62,11 +62,12 @@
   - Shape 통일로 불필요한 복사 제거. 이전 실행의 KV Cache 출력을 직접 move하여 입력으로 재사용
 
 **결과:**
-- TODO: 베이스라인 대비 성능 비교
+- TODO: 베이스라인 대비 성능 비교 (dynamic shape에서 다루는 shape이 작아서 차이가 별로 안 일어나는건가 싶기도 함)
 
 **향후 개선 방안:**
 - **검증 강화**: 다양한 프롬프트와 토큰 길이로 Decode sliding mask 구현 검증
 - **메모리 최적화**: Prefill/Decode 모델 간 weight 공유 방안 검토, onnx runtime 출력 공간 사전 할당 방안 검토
+- **성능 최적화**: 상황에 따라 decode에서 더 작은 sequence length를 가정하는 kv cache를 사용할 수 있을지 고려
 - **배치 처리**: 다중 배치 지원 방안 고려
 - **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
 
