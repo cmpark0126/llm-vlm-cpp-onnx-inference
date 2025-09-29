@@ -48,7 +48,7 @@ class StaticGemmaPrefill(nn.Module):
         self._prepare_static_masks()
 
     def _prepare_static_masks(self):
-        # Causal mask와 sliding window mask 미리 계산
+        # Causal mask 미리 계산
 
         # 기본 causal mask 생성 (하삼각 행렬)
         # 현재 위치보다 뒤에 있는 토큰들은 볼 수 없도록 -inf로 마스킹
@@ -60,26 +60,32 @@ class StaticGemmaPrefill(nn.Module):
         # 전체 attention용 마스크 (표준 causal mask)
         self.static_full_attention_mask = causal_mask
 
-        # Sliding window attention 마스크 (설정된 경우)
+        # Sliding window 설정 확인
         assert self.config.sliding_window is not None, "Sliding window must be set"
-        sliding_window = self.config.sliding_window
-        sliding_mask = causal_mask.clone()
 
-        # Sliding window 적용 - 윈도우 크기를 벗어난 토큰들 마스킹
-        for i in range(self.seq_length):
+    def _create_dynamic_sliding_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
+        # 실제 시퀀스 길이를 고려한 동적 sliding window mask 생성 (batch_size=1)
+        sliding_window = self.config.sliding_window
+
+        # 기본 causal mask로 시작
+        sliding_mask = self.static_full_attention_mask.clone()
+
+        # 실제 토큰 길이 계산 (패딩 제외, batch_size=1이므로 [0] 인덱스 사용)
+        actual_length = attention_mask[0].sum().item()
+
+        # 실제 길이 내에서만 sliding window 적용
+        for i in range(min(actual_length, self.seq_length)):
             start_pos = max(0, i - sliding_window)
             if start_pos > 0:
                 sliding_mask[i, :start_pos] = float("-inf")
 
-        self.static_sliding_attention_mask = sliding_mask
+        return sliding_mask
 
     def _create_input_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
-        batch_size = attention_mask.shape[0]
-
-        # Attention mask 형태 변환
+        # Attention mask 형태 변환 (batch_size=1)
         layer_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
         layer_attention_mask = layer_attention_mask.expand(
-            batch_size, 1, self.seq_length, self.seq_length
+            1, 1, self.seq_length, self.seq_length
         )
 
         # Additive mask로 변환 (0은 주의할 수 있음, -inf는 무시)
@@ -112,8 +118,11 @@ class StaticGemmaPrefill(nn.Module):
         full_attention_mask = (
             input_attention_mask + self.static_full_attention_mask.unsqueeze(0)
         )
+
+        # Dynamic sliding window mask 생성
+        dynamic_sliding_mask = self._create_dynamic_sliding_mask(attention_mask)
         sliding_attention_mask = (
-            input_attention_mask + self.static_sliding_attention_mask.unsqueeze(0)
+            input_attention_mask + dynamic_sliding_mask.unsqueeze(0)
         )
 
         # 레이어 타입별 마스크 매핑
