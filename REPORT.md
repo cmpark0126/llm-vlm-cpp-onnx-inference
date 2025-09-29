@@ -3,38 +3,41 @@
 ## 요약
 
 ### Problem 1: LLM 추론 성능 비교 (C++ vs Python)
-**기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
-  - C++ ONNX Runtime이 유효하게 동작함
+- **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+    - C++ ONNX Runtime이 유효하게 동작함
 
-**성능 비교:**: Python과 C++이 거의 비슷한 성능을 보이는 것으로 보임
-| 지표 | Python Baseline | C++ Implementation | 개선율 |
-|------|----------------|-------------------|--------|
-| TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
-| TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
-| Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
+- **성능 비교:**: Python과 C++이 거의 비슷한 성능을 보이는 것으로 보임
+
+    | 지표 | Python Baseline | C++ Implementation | 개선율 |
+    |------|----------------|-------------------|--------|
+    | TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
+    | TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
+    | Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
 
 ### Problem 2: Static Graph 추론 성능 비교 (C++ vs Python)
-**기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
-  - 주어진 프롬프트에 대해 Static Graph가 기존 동적 그래프와 같은 동작을 보임
+- **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+    - 주어진 프롬프트에 대해 Static Graph가 기존 동적 그래프와 같은 동작을 보임
 
-**성능 비교:**
-| 지표 | Python Baseline | C++ Implementation | 개선율 |
-|------|----------------|-------------------|--------|
-| TTFT (ms) | 278.0 | 704.0 | -153.2% (악화) |
-| TPOT (ms) | 137.7 | 151.5 | -10.0% (악화) |
-| Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
+- **성능 비교:**
+
+    | 지표 | Python Baseline | C++ Implementation | 개선율 |
+    |------|----------------|-------------------|--------|
+    | TTFT (ms) | 278.0 | 704.0 | -153.2% (악화) |
+    | TPOT (ms) | 137.7 | 151.5 | -10.0% (악화) |
+    | Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
 
 ### Problem 3: VLM 추론 성능 비교 (C++ vs Python)
-**기능 검증**: C++와 Python 구현이 **거의 동일한** 결과 출력 확인
- - 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
- - 결과물이 어떻게 다른지는 [`problem-3-vlm-텍스트-생성`](#problem-3-vlm-텍스트-생성) 확인
+- **기능 검증**: C++와 Python 구현이 **거의 동일한** 결과 출력 확인
+    - 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
+    - 결과물이 어떻게 다른지는 [`problem-3-vlm-텍스트-생성`](#problem-3-vlm-텍스트-생성) 확인
 
-**성능 비교:**
-| 지표 | Python Baseline | C++ Implementation | 개선율 |
-|------|----------------|-------------------|--------|
-| TTFT (ms) | 715.9 | 830.0 | -15.9% (악화) |
-| TPOT (ms) | 73.3 | 77.0 | -5.0% (악화) |
-| Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
+- **성능 비교:**
+
+    | 지표 | Python Baseline | C++ Implementation | 개선율 |
+    |------|----------------|-------------------|--------|
+    | TTFT (ms) | 715.9 | 830.0 | -15.9% (악화) |
+    | TPOT (ms) | 73.3 | 77.0 | -5.0% (악화) |
+    | Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
 
 ### 총평
 - **C++ 결과 vs Python 결과 유사성**: 모든 문제에서 생성 결과물이 완벽히 일치하거나, 거의 일치함
@@ -79,11 +82,15 @@
 - **Prefill & Decode Static ONNX Graph 추출:**
   - **참고 구현**: `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM`
   - **KV Cache 처리**: `transformers/cache_utils.py`의 `Cache::update` 인터페이스를 duck typing으로 구현
-- **Prefill & Decode Static Graph 구현 주요 차이:**
-  | 특성 | Prefill 모델 | Decode 모델 |
-  |------|-------------|------------|
-  | **Sliding Window 구현 여부** | 미구현 (max sequence length(128) < sliding window(512)) | 구현 (max sequence length(1024) > sliding window(512)) |
-  | **KV Cache 처리** | 런타임에 생성되는 것을 저장하고 이를 반환하도록 | 입력 KV Cache Padding 공간에 새로운 KV Cache를 복사하고, 이전 cache와 새로운 cache가 모두 쓰인 것을 반환 |
+  - **Prefill & Decode Static Graph 구현 주요 차이:**
+
+    | 특성 | Prefill 모델 | Decode 모델 |
+    |------|-------------|------------|
+    | **Sliding Window 구현 여부** | 미구현 (max sequence length(128) < sliding window(512)) | 구현 (max sequence length(1024) > sliding window(512)) |
+    | **KV Cache 처리** | 런타임에 생성되는 것을 저장하고 이를 반환하도록 | 입력 KV Cache Padding 공간에 새로운 KV Cache를 복사하고, 이전 cache와 새로운 cache가 모두 쓰인 것을 반환 |
+
+- **Decode 입출력 KV Cache Shape 통일:**
+  - Shape 통일로 불필요한 복사 제거. 이전 실행의 KV Cache 출력을 직접 move하여 입력으로 재사용
 - **LLM Tokenizer 재사용:**
   - Problem 1에서 구현한 동일한 Tokenizer 활용
 - **개발 환경 메모리 제약 대응:**
@@ -91,19 +98,15 @@
     - 메모리 절약을 위해 PREFILL을 먼저 로드하여 사용하고 언로드 한 이후 DECODE를 로드하여 사용하는 방식
   - README.md 예제를 활용한 성능 측정 시에는 초반에 모든 모델을 다 로드하도록 구성되어 있음
 
-**성능 고려 사항:**
-- **Decode KV Cache Shape 통일:**
-  - Shape 통일로 불필요한 복사 제거. 이전 실행의 KV Cache 출력을 직접 move하여 입력으로 재사용
-
 **결과:**
 - **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+- **성능 비교**: Prefill, Decode 모델의 공통 부분을 제각기 로드하여 메모리 활용률이 매우 떨어지고, Prefill 구현에 비효율적인 부분이 있는 듯 보임.
 
-**성능 비교:**
-| 지표 | Python Baseline | C++ Implementation | 개선율 |
-|------|----------------|-------------------|--------|
-| TTFT (ms) | 278.0 | 704.0 | -153.2% (악화) |
-| TPOT (ms) | 137.7 | 151.5 | -10.0% (악화) |
-| Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
+    | 지표 | Python Baseline | C++ Implementation | 개선율 |
+    |------|----------------|-------------------|--------|
+    | TTFT (ms) | 278.0 | 704.0 | -153.2% (악화) |
+    | TPOT (ms) | 137.7 | 151.5 | -10.0% (악화) |
+    | Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
 
 **향후 개선 방안:**
 - **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
