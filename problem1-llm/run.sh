@@ -8,6 +8,7 @@ cd ../baselines
 python3 run_problem1_baseline.py
 cd ../problem1-llm
 
+echo ""
 echo "Running Problem 1 Solution..."
 
 # Create build directory

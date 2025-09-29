@@ -8,6 +8,7 @@ cd ../baselines
 python3 run_problem2_baseline.py
 cd ../problem2-static
 
+echo ""
 echo "Running Problem 2 Solution..."
 
 # Export ONNX Static Graph

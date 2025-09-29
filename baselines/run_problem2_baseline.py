@@ -175,6 +175,5 @@ if __name__ == "__main__":
     tokenizer, model = load_model()
     inputs = prepare_inputs(tokenizer, model)
 
-    print("=== PYTORCH DYNAMIC SPLIT MODEL ===")
     print("HuggingFace transformers 모델을 dynamic prefill/decode 단계로 분리하여 실행")
     execute_split_model(tokenizer, model, inputs)

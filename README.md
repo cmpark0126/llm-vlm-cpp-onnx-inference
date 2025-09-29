@@ -35,7 +35,7 @@ cd problem1-llm
 ./run.sh
 cd ..
 
-# 문제 2: Static graph export & 텍스트 생성 (TODO: compare to original)
+# 문제 2: Static graph export & 텍스트 생성
 cd problem2-static
 ./run.sh
 cd ..

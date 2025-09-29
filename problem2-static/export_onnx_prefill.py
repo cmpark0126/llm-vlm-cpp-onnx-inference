@@ -3,8 +3,13 @@
 import os
 import torch
 import torch.nn as nn
+import warnings
 from typing import Optional, Tuple
 from transformers import AutoModelForCausalLM
+
+# ONNX export 경고 메시지 억제 (필요시 억제 해제)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
 
 # 환경 변수로 설정 가능한 상수
 DEFAULT_SEQ_LENGTH = int(os.environ.get('PREFILL_SEQ_LENGTH', '128'))
