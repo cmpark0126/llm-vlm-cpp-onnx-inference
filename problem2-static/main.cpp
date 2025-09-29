@@ -16,6 +16,7 @@ using json = nlohmann::json;
 
 // Constants
 const int PREFILL_SEQ_LEN = 128;
+const int MAX_SEQ_LEN = 1024;
 
 // Get whether to unload prefill model before decode from environment variable
 bool get_unload_prefill_before_decode() {
@@ -131,9 +132,6 @@ int main() {
 
     int64_t current_token = next_token_id;
     int64_t current_position = original_seq_len + 1;
-
-    const char* cache_length_env = std::getenv("CACHE_LENGTH");
-    const int MAX_SEQ_LEN = cache_length_env ? std::atoi(cache_length_env) : 1024;
 
     std::vector<int64_t> decode_input_ids = {current_token};
     std::vector<int64_t> decode_position_ids = {current_position};
@@ -344,20 +342,6 @@ int main() {
             first_token_generated = true;
         }
 
-        int cache_pos = current_position - 1;
-        for (size_t kv_idx = 0; kv_idx < kv_cache_storage.size(); kv_idx++) {
-            const float* present_data = decode_outputs[1 + kv_idx].GetTensorData<float>();
-            auto present_shape = decode_outputs[1 + kv_idx].GetTensorTypeAndShapeInfo().GetShape();
-            auto& cache_data = kv_cache_storage[kv_idx];
-
-            for (int64_t h = 0; h < present_shape[1]; h++) {
-                for (int64_t d = 0; d < present_shape[3]; d++) {
-                    size_t idx = h * MAX_SEQ_LEN * present_shape[3] + cache_pos * present_shape[3] + d;
-                    cache_data[idx] = present_data[idx];
-                }
-            }
-        }
-
         current_token = decode_next_token;
         current_position++;
 
@@ -382,23 +366,10 @@ int main() {
         decode_input_values.push_back(Ort::Value::CreateTensor<int64_t>(
             memory_info, cache_position.data(), cache_position.size(),
             cache_position_shape.data(), cache_position_shape.size()));
-
-        for (size_t kv_idx = 0; kv_idx < kv_cache_storage.size(); kv_idx++) {
-            std::vector<int64_t> padded_shape;
-            if (kv_idx % 2 == 0) {
-                auto& key_tensor = outputs[1 + kv_idx];
-                auto key_shape = key_tensor.GetTensorTypeAndShapeInfo().GetShape();
-                padded_shape = {key_shape[0], key_shape[1], MAX_SEQ_LEN, key_shape[3]};
-            } else {
-                auto& value_tensor = outputs[1 + kv_idx];
-                auto value_shape = value_tensor.GetTensorTypeAndShapeInfo().GetShape();
-                padded_shape = {value_shape[0], value_shape[1], MAX_SEQ_LEN, value_shape[3]};
-            }
-
-            decode_input_values.push_back(Ort::Value::CreateTensor<float>(
-                memory_info, kv_cache_storage[kv_idx].data(), kv_cache_storage[kv_idx].size(),
-                padded_shape.data(), padded_shape.size()));
+        for (size_t i = 1; i < decode_outputs.size(); i++) {
+            decode_input_values.push_back(std::move(decode_outputs[i]));
         }
+
         std::string token_text = tokenizer.decode(decode_next_token);
         if (token_text.find("<") == std::string::npos &&
             token_text.find(">") == std::string::npos) {
