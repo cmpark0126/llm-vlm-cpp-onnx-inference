@@ -138,20 +138,18 @@
 **결과:**
 - **기능 검증**: C++와 Python 구현이 거의 동일한 결과 출력 확인. 정확히 같지 않은 이유는 이미지 처리 과정에서 오차가 발생하여 그런 것으로 확인
 
-    ```bash
-    # Python (run_vlm.py)
+  - Python (run_vlm.py)
     "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
     a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
-    that it is likely a densely populated urban area with a mix of modern and traditional
+    that it is likely a densely populated urban area** with a mix of modern and traditional
     architecture. The night setting adds to the atmosphere of the scene, making it a visually
-    appealing and captivating image."
+    appealing and captivating image.**"
 
-    # C++ (problem3-vlm)
+  - C++ (problem3-vlm)
     "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
     a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
-    that it is likely a densely populated urban area. The night view of the city also adds to
-    the atmosphere, making it a visually appealing scene."
-    ```
+    that it is likely a densely populated urban area**. The night view of the city also adds to
+    the atmosphere, making it a visually appealing scene.**"
 
 ---
 
