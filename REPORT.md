@@ -25,7 +25,7 @@
 | Total Tokens | 79 | 79 | 동일 |
 
 ### Problem 3: VLM 추론 성능 비교 (C++ vs Python)
-**기능 검증**: ✅ C++와 Python 구현이 거의 동일한 결과 출력 확인 (이미지 처리 과정에서 미세한 오차 존재)
+**기능 검증**: ✅ C++와 Python 구현이 거의 동일한 결과 출력 확인 (이미지 처리 과정에서 미세한 오차로 인해 생성 결과 차이 발생)
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
@@ -44,6 +44,8 @@
 - **개선 필요 영역**: ONNX Runtime 설정 최적화, 모델 로딩 전략 개선
 
 ## 상세 결과
+
+---
 
 ### Problem 1: LLM 텍스트 생성
 **구현 내용:**
@@ -67,6 +69,8 @@
 **향후 개선 방안:**
 - **일반화 개선**: 다양한 프롬프트와 토큰 길이에 대한 테스트 확대
 - **성능 최적화**: ONNX 모델 양자화 및 그래프 최적화 적용
+
+---
 
 ### Problem 2: Static Graph Export & 텍스트 생성
 **구현 내용:**
@@ -105,12 +109,12 @@
 - **배치 처리**: 다중 배치 지원 방안 고려
 - **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
 
+---
+
 ### Problem 3: VLM 텍스트 생성
 **사전 작업:**
 - 프롬프트 수정으로 이미지 토큰 처리 테스트 수행
-  ```
-  <|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n
-  ```
+  `<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n`
   - 기존 프롬프트에 누락된 `<image>` 태그 추가
   - 오타 수정으로 정확한 토큰화 보장
 
@@ -161,10 +165,7 @@ the atmosphere, making it a visually appealing scene."
 - C++ 코드 작성에는 Claude Code를 많이 활용했습니다. 모든 코드는 직접 읽어보고 디버깅을 진행했습니다.
 
 ## TODO
-- python과의 성능 비교가 정확히 같은 부분을 비교하도록 구현되어있는 것이 맞는지 점검. 성능 측정에 tokenizing은 제외할 것 
 - 필요시 C++ 프로파일링도 진행해서, 고치지는 못하더라도 어디를 최적화하면 좋을지 보고서에 넣기 (성능 비교 과정에서)
-- 결과가 문제가 없는지(예: 추론, 벤치마크 등), 배점을 기반으로 점수 예측 수행
-- O3 컴파일
 - 성능 분석에는 10번 정도 측정한 평균값 사용, 어떤 환경에서 측정한 것인지 (스크립트 만들기, python, C++ 둘 다 마찬가지)
 - 주석들 전반적으로 한글로 수정
 - Python 출력과 확실하게 비교할 수 있도록 모든 실험 이후에 비교 표가 떨어지도록 구성?
