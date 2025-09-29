@@ -3,6 +3,13 @@ set -e
 
 echo "Building Problem 1: LLM Text Generation..."
 
+echo "Running baselines..."
+cd ../baselines
+python3 run_problem1_baseline.py
+cd ../problem1-llm
+
+echo "Running Problem 1 Solution..."
+
 # Create build directory
 mkdir -p build
 cd build

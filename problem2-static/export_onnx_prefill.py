@@ -205,7 +205,7 @@ if __name__ == "__main__":
 
     # 모델 로드
     print("Gemma-3-1b-it 모델 로드 중...")
-    local_model_path = "./gemma-3-1b-it"
+    local_model_path = "../baselines/gemma-3-1b-it"
     model = AutoModelForCausalLM.from_pretrained(
         "google/gemma-3-1b-it",
         cache_dir=local_model_path,

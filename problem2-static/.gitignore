@@ -2,8 +2,6 @@
 gemma-3-1b-it/
 gemma-3-1b-it-prefill/
 gemma-3-1b-it-decode/
-_gemma-3-1b-it-prefill/
-_gemma-3-1b-it-decode/
 
 # ONNX 모델 파일들
 *.onnx

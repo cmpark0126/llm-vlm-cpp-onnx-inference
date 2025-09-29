@@ -248,13 +248,6 @@ int main() {
         }
     }
 
-    // 4. Print generated tokens
-    std::cout << "\n=== Generated Tokens ===" << std::endl;
-    for (int token : generated_tokens) {
-        std::cout << tokenizer.decode(token) << std::flush;
-    }
-    std::cout << std::endl;
-
     // 4. Performance measurements
     int64_t generation_end_ms = get_time_ms();
     double total_generation_time_ms = generation_end_ms - generation_start_ms;
