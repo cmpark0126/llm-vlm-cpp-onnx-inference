@@ -36,17 +36,21 @@
 
 ### Problem 2: Static Graph Export & 텍스트 생성
 **구현 내용:**
-- **Gemma Python 예제 작성**:
-    - Static onnx graph를 추출하기 전에, 베이스라인 확보
-    - Problem1과 동일한 입력을 그대로 사용했을 때 어떤 결과물이 나오는지 확인
-    - C++ 구현의 결과물과의 올바른 비교를 위해서 샘플링을 끄고 랜덤하지 않은 출력이 나오도록 조정
-- **Prefill&Decode Static ONNX Graph 추출**
-    - `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM` 구현 참고
-    - 특히, KV Cache 구현은 `transformers/cache_utils.py`의 `Cache`의 인터페이스에 의존하는 부분이 있어 이를 duck typing 하는 방식으로 동작 수행하도록 작업 진행
-    - Prefill, Decode 각각의 경우 약간의 차이가 있어, 따로 구현하여 추출
-        - 예1: Prefill의 경우 128 sequence length는 베이스라인의 sliding_window 크기인 512보다 작아 sliding window를 구현하지 않음. 반면에 Decode는 1024 sequence length를 가질 수 있기에 sliding window를 구현
-        - 예2: Prefill의 경우 KV Cache가 런타임에 만들어지고, 이전에는 전달되는 것이 없어 TempCache가 그냥 updat한 것을 바로 반환하는 방식으로 구현. 반면, Decode는 이전 KV Cache에 새로운 KV Cache를 업데이트 해야 하는 구조를 가지기 때문에 새로운 KV Cache를 이전 KV Cache Tensor에 적용하는 코드 추가
-- **LLM Tokenizer 재사용** 
+- **Gemma Python 예제 작성:**:
+  - Static onnx graph를 추출하기 전에, 베이스라인 확보
+  - Problem1과 동일한 입력을 그대로 사용했을 때 어떤 결과물이 나오는지 확인
+  - C++ 구현의 결과물과의 올바른 비교를 위해서 샘플링을 끄고 랜덤하지 않은 출력이 나오도록 조정
+- **Prefill&Decode Static ONNX Graph 추출:**
+  - `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM` 구현 참고
+  - 특히, KV Cache 구현은 `transformers/cache_utils.py`의 `Cache`의 인터페이스에 의존하는 부분이 있어 이를 duck typing 하는 방식으로 동작 수행하도록 작업 진행
+  - Prefill, Decode 각각의 경우 약간의 차이가 있어, 따로 구현하여 추출
+    - 예1: Prefill의 경우 128 sequence length는 베이스라인의 sliding_window 크기인 512보다 작아 sliding window를 구현하지 않음. 반면에 Decode는 1024 sequence length를 가질 수 있기에 sliding window를 구현
+    - 예2: Prefill의 경우 KV Cache가 런타임에 만들어지고, 이전에는 전달되는 것이 없어 TempCache가 그냥 updat한 것을 바로 반환하는 방식으로 구현. 반면, Decode는 이전 KV Cache에 새로운 KV Cache를 업데이트 해야 하는 구조를 가지기 때문에 새로운 KV Cache를 이전 KV Cache Tensor에 적용하는 코드 추가
+- **LLM Tokenizer 재사용:**
+  - Problem 1에서 사용한 것 과 같은 Tokenizer를 사용하도록 작업
+- **개발을 위해 모델 로딩 시점 조정:**
+  - 개발 환경인 로컬 맥북의 메모리 부족으로 인해 Static Graph를 한번에 로드하기 힘든 문제가 있어 `UNLOAD_PREFILL_BEFORE_DECODE` 환경변수를 사용하여 모델을 한번에 하나만 로딩하여 사용하도록 하는 작업 진행
+  - 실제 성능 측정 등 작업은 AWS의 `TODO`에서 수행하여 모든 모델을 사전에 올리고 수행하는 방식을 채택
 
 **성능 고려 사항:**
 - TODO

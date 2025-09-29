@@ -69,8 +69,17 @@ int main() {
     Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "StaticGemmaInference");
     Ort::SessionOptions session_options;
 
+    bool unload_prefill = get_unload_prefill_before_decode();
+
     std::string prefill_model_path = "../gemma-3-1b-it-prefill/gemma-3-1b-it-prefill.onnx";
     std::unique_ptr<Ort::Session> prefill_session = std::make_unique<Ort::Session>(env, prefill_model_path.c_str(), session_options);
+
+    std::string decode_model_path = "../gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx";
+    std::unique_ptr<Ort::Session> decode_session = nullptr;
+
+    if (!unload_prefill) {
+        decode_session = std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
+    }
     auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
     std::vector<int64_t> input_shape = {batch_size, PREFILL_SEQ_LEN};
 
@@ -116,7 +125,6 @@ int main() {
         }
     }
 
-    bool unload_prefill = get_unload_prefill_before_decode();
     if (unload_prefill) {
         prefill_session.reset();
     }
@@ -135,8 +143,9 @@ int main() {
         decode_attention_mask[i] = 1;
     }
 
-    std::string decode_model_path = "../gemma-3-1b-it-decode/gemma-3-1b-it-decode.onnx";
-    Ort::Session decode_session(env, decode_model_path.c_str(), session_options);
+    if (unload_prefill) {
+        decode_session = std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
+    }
 
     int num_layers = (outputs.size() - 1) / 2;
 
@@ -270,12 +279,12 @@ int main() {
     }
 
     // Get decode output names
-    size_t decode_output_count = decode_session.GetOutputCount();
+    size_t decode_output_count = decode_session->GetOutputCount();
     std::vector<const char*> decode_output_names(decode_output_count);
     std::vector<std::string> decode_output_names_storage(decode_output_count);
 
     for (size_t i = 0; i < decode_output_count; ++i) {
-        auto output_name_allocated = decode_session.GetOutputNameAllocated(i, allocator);
+        auto output_name_allocated = decode_session->GetOutputNameAllocated(i, allocator);
         decode_output_names_storage[i] = std::string(output_name_allocated.get());
         decode_output_names[i] = decode_output_names_storage[i].c_str();
     }
@@ -294,7 +303,7 @@ int main() {
     }
 
     for (int i = 0; i < MAX_SEQ_LEN - 1; i++) {
-        auto decode_outputs = decode_session.Run(
+        auto decode_outputs = decode_session->Run(
             Ort::RunOptions{nullptr}, decode_input_names.data(), decode_input_values.data(),
             decode_input_values.size(), decode_output_names.data(), decode_output_names.size());
 
