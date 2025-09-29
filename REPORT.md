@@ -141,15 +141,15 @@
   - Python (run_vlm.py)
     "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
     a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
-    that it is likely a densely populated urban area** with a mix of modern and traditional
-    architecture. The night setting adds to the atmosphere of the scene, making it a visually
-    appealing and captivating image.**"
+    that it is likely a densely populated urban area **with a mix of modern and traditional**
+    **architecture. The night setting adds to the atmosphere of the scene, making it a visually**
+    **appealing and captivating image.**"
 
   - C++ (problem3-vlm)
     "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
     a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
-    that it is likely a densely populated urban area**. The night view of the city also adds to
-    the atmosphere, making it a visually appealing scene.**"
+    that it is likely a densely populated urban area. **The night view of the city also adds to**
+    **the atmosphere, making it a visually appealing scene.**"
 
 ---
 
