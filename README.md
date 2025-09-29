@@ -1,6 +1,6 @@
 # LLM/VLM C++ ONNX Inference
 
-- 모든 동작은 AWS의 `TODO` instance를 기준으로 합니다.
+- 모든 동작은 AWS의 `t2.2xlarge` instance를 기준으로 합니다.
 - Docker가 설치되어 있고, 가용 가능한 메모리가 16GB 이상이 확보되는 경우에는 다른 환경에서도 동작 가능할 것으로 예상되나, 테스트되지는 않았습니다.
 
 ## Docker 개발 & 실행 환경
