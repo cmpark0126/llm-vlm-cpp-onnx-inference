@@ -50,6 +50,13 @@ class StaticGemmaPrefill(nn.Module):
     def _prepare_static_masks(self):
         # Causal mask 미리 계산
 
+        # Sliding window 설정 확인
+        assert self.config.sliding_window is not None, "Sliding window must be set"
+
+        # Seq length와 sliding window 비교
+        assert self.seq_length <= self.config.sliding_window, \
+            f"seq_length ({self.seq_length}) > sliding_window ({self.config.sliding_window}), sliding window 구현 필요"
+
         # 기본 causal mask 생성 (하삼각 행렬)
         # 현재 위치보다 뒤에 있는 토큰들은 볼 수 없도록 -inf로 마스킹
         causal_mask = torch.triu(
@@ -59,27 +66,6 @@ class StaticGemmaPrefill(nn.Module):
 
         # 전체 attention용 마스크 (표준 causal mask)
         self.static_full_attention_mask = causal_mask
-
-        # Sliding window 설정 확인
-        assert self.config.sliding_window is not None, "Sliding window must be set"
-
-    def _create_dynamic_sliding_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
-        # 실제 시퀀스 길이를 고려한 동적 sliding window mask 생성 (batch_size=1)
-        sliding_window = self.config.sliding_window
-
-        # 기본 causal mask로 시작
-        sliding_mask = self.static_full_attention_mask.clone()
-
-        # 실제 토큰 길이 계산 (패딩 제외, batch_size=1이므로 [0] 인덱스 사용)
-        actual_length = attention_mask[0].sum().item()
-
-        # 실제 길이 내에서만 sliding window 적용
-        for i in range(min(actual_length, self.seq_length)):
-            start_pos = max(0, i - sliding_window)
-            if start_pos > 0:
-                sliding_mask[i, :start_pos] = float("-inf")
-
-        return sliding_mask
 
     def _create_input_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
         # Attention mask 형태 변환 (batch_size=1)
@@ -115,21 +101,9 @@ class StaticGemmaPrefill(nn.Module):
         input_attention_mask = self._create_input_attention_mask(attention_mask)
 
         # 패딩 마스크와 causal mask 결합
-        full_attention_mask = (
+        final_attention_mask = (
             input_attention_mask + self.static_full_attention_mask.unsqueeze(0)
         )
-
-        # Dynamic sliding window mask 생성
-        dynamic_sliding_mask = self._create_dynamic_sliding_mask(attention_mask)
-        sliding_attention_mask = (
-            input_attention_mask + dynamic_sliding_mask.unsqueeze(0)
-        )
-
-        # 레이어 타입별 마스크 매핑
-        causal_mask_mapping = {
-            "full_attention": full_attention_mask,
-            "sliding_attention": sliding_attention_mask,
-        }
 
         # 5. 위치 인코딩 생성
         hidden_states = inputs_embeds
@@ -145,15 +119,12 @@ class StaticGemmaPrefill(nn.Module):
             # 레이어별 KV cache 초기화
             kv_cache = TempCache()
 
-            # 레이어별 attention mask 선택
-            attention_mask_for_layer = causal_mask_mapping[decoder_layer.attention_type]
-
-            # 레이어 순전파
+            # 레이어 순전파 (모든 레이어에 동일한 causal mask 사용)
             outputs = decoder_layer(
                 hidden_states,
                 position_embeddings_global=position_embeddings_global,
                 position_embeddings_local=position_embeddings_local,
-                attention_mask=attention_mask_for_layer,
+                attention_mask=final_attention_mask,
                 position_ids=position_ids,
                 past_key_values=kv_cache,  # KV cache 전달
                 output_attentions=False,

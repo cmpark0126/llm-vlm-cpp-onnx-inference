@@ -105,6 +105,11 @@ class StaticGemmaDecode(nn.Module):
         # Sliding window 설정 확인
         assert self.config.sliding_window is not None, "Sliding window must be set"
 
+        # Cache length와 sliding window 비교
+        if self.cache_length <= self.config.sliding_window:
+            print(f"Warning: cache_length ({self.cache_length}) <= sliding_window ({self.config.sliding_window})")
+            print("지금 설정에서는 sliding window 효과가 없습니다.")
+
     def _create_input_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
         # 패딩 마스크를 4D additive mask로 변환 (decode용: [1, 1, 1, cache_length])
         layer_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
