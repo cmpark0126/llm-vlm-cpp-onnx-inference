@@ -22,10 +22,10 @@ sudo docker stop llm-vlm-dev && docker rm llm-vlm-dev
 ## 사전 작업 및 과제 실행
 Docker 컨테이너 내에서:
 ```bash
-# 예제 허깅페이스 레포 다운로드 (problem1, 3용)
+# 예제 허깅페이스 레포 다운로드 (문제1, 3)
 ./setup.sh
 
-# problem2용 - Hugging Face 토큰 설정
+# Hugging Face 토큰 설정  (문제 2)
 export HF_TOKEN=your_huggingface_token_here
 
 # 문제 1: LLM 텍스트 생성
