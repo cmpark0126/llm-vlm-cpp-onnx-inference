@@ -4,6 +4,7 @@
 
 ### Problem 1: LLM 추론 성능 비교 (C++ vs Python)
 **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+  - C++ ONNX Runtime이 유효하게 동작함
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
@@ -14,7 +15,7 @@
 
 ### Problem 2: Static Graph 추론 성능 비교 (C++ vs Python)
 **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
-  - 추출한 Static Graph가 적어도 주어진 프롬프트에 대해서는 기존 torch 동적 그래프 동작과 같은 동작을 한다고 유추할 수 있음
+  - 주어진 프롬프트에 대해 Static Graph가 기존 동적 그래프와 같은 동작을 보임
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
@@ -25,7 +26,7 @@
 
 ### Problem 3: VLM 추론 성능 비교 (C++ vs Python)
 **기능 검증**: C++와 Python 구현이 **거의 동일한** 결과 출력 확인
- - 원인: 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
+ - 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
