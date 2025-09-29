@@ -51,7 +51,7 @@
 
 ### Problem 1: LLM 텍스트 생성
 **구현 내용**:
-- **LLM Tokenizer 구현** (common/LlmTokenizer.*)
+- **LLM Tokenizer 구현** ([`common/LlmTokenizer.*`](./common/LlmTokenizer.h))
   - 공백을 `▁`로 변환하여 vocab에서 매칭되는 것들을 검색하는 등의 구현 포함
 - **ONNX 기반 LLM 추론 엔진** (problem1-llm/main.cpp)
 - **메모리 연산 최적화**: KV cache에서 move 활용으로 불필요한 복사 제거
@@ -129,7 +129,7 @@
   - 오타 수정으로 정확한 토큰화 보장
 
 **구현 내용**:
-- **VLM Tokenizer 구현** (common/VlmTokenizer.*)
+- **VLM Tokenizer 구현** ([`common/VlmTokenizer.*`](./common/VlmTokenizer.h))
   - GPT 스타일 토크나이저 구현 (공백을 Ġ, 개행을 Ċ으로 변환)
   - 특수 토큰 `<image>` 처리
 - **멀티모달 임베딩 처리**
