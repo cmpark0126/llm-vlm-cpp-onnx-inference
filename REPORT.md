@@ -59,12 +59,13 @@
 **결과:**
 - **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
 
-**성능 지표:**
-| 지표 | 값 |
-|------|-----|
-| TTFT (Time-to-First-Token) | 1,107 ms |
-| TPOT (Time-Per-Output-Token) | 414.964 ms |
-| Peak Memory Usage | 3,614.18 MB |
+**성능 비교:**
+| 지표 | Python Baseline | C++ Implementation | 개선율 |
+|------|----------------|-------------------|--------|
+| TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
+| TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
+| Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
+| Total Tokens | 111 | 111 | 동일 |
 
 **향후 개선 방안:**
 - **일반화 개선**: 다양한 프롬프트와 토큰 길이에 대한 테스트 확대
@@ -100,7 +101,15 @@
   - Shape 통일로 불필요한 복사 제거. 이전 실행의 KV Cache 출력을 직접 move하여 입력으로 재사용
 
 **결과:**
-- TODO: 베이스라인 대비 성능 비교 (dynamic shape에서 다루는 shape이 작아서 차이가 별로 안 일어나는건가 싶기도 함)
+- **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+
+**성능 비교:**
+| 지표 | Python Baseline | C++ Implementation | 개선율 |
+|------|----------------|-------------------|--------|
+| TTFT (ms) | 278.0 | 704.0 | -153.2% (악화) |
+| TPOT (ms) | 137.7 | 151.5 | -10.0% (악화) |
+| Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
+| Total Tokens | 79 | 79 | 동일 |
 
 **향후 개선 방안:**
 - **검증 강화**: 다양한 프롬프트와 토큰 길이로 Decode sliding mask 구현 검증
@@ -114,7 +123,9 @@
 ### Problem 3: VLM 텍스트 생성
 **사전 작업:**
 - 프롬프트 수정으로 이미지 토큰 처리 테스트 수행
-  `<|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n`
+  ```
+  <|im_start|>system\nYou are a helpful assistant.<|im_end|>\n<|im_start|>user\n<image>\nWhere do you think this image is from?<|im_end|>\n<|im_start|>assistant\n
+  ```
   - 기존 프롬프트에 누락된 `<image>` 태그 추가
   - 오타 수정으로 정확한 토큰화 보장
 
@@ -147,12 +158,13 @@ that it is likely a densely populated urban area. The night view of the city als
 the atmosphere, making it a visually appealing scene."
 ```
 
-**성능 지표:**
-| 지표 | 값 |
-|------|-----|
-| TTFT (Time-to-First-Token) | 1,029 ms |
-| TPOT (Time-Per-Output-Token) | 34.4 ms |
-| Peak Memory Usage | 3,510.42 MB |
+**성능 비교:**
+| 지표 | Python Baseline | C++ Implementation | 개선율 |
+|------|----------------|-------------------|--------|
+| TTFT (ms) | 715.9 | 830.0 | -15.9% (악화) |
+| TPOT (ms) | 73.3 | 77.0 | -5.1% (악화) |
+| Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
+| Total Tokens | 80 | 70 | 동일하지 않음 |
 
 **향후 계획:**
 - 모든 모델들이 f16을 사용하도록 양자화 하는 방법 고려
@@ -168,8 +180,6 @@ the atmosphere, making it a visually appealing scene."
 - 필요시 C++ 프로파일링도 진행해서, 고치지는 못하더라도 어디를 최적화하면 좋을지 보고서에 넣기 (성능 비교 과정에서)
 - 성능 분석에는 10번 정도 측정한 평균값 사용, 어떤 환경에서 측정한 것인지 (스크립트 만들기, python, C++ 둘 다 마찬가지)
 - 주석들 전반적으로 한글로 수정
-- Python 출력과 확실하게 비교할 수 있도록 모든 실험 이후에 비교 표가 떨어지도록 구성?
-- ONNX Runtime 설정 통일 (thread는 하나만 사용하도록)
 
 ## TODO (회사에 말할 것, 주말에 작업을 하는 와중에 생긴거라 연락할 수 없었음을 양해 구할것)
 * 프롬프트를 임의로 바꾸어 테스트함 
