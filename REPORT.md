@@ -169,4 +169,3 @@
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
 - Peak Memory Usage: [getrusage(2)](https://man7.org/linux/man-pages/man2/getrusage.2.html)
-- Claude Code를 활용하여 작업했습니다. 혹시나 싶어 미리 말씀드립니다.
