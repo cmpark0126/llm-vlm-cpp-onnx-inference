@@ -149,3 +149,4 @@ the atmosphere, making it a visually appealing scene."
 * 프롬프트를 임의로 바꾸어 테스트함 
 * 1024로 하면 메모리 사용량이 너무 커 가지고 있는 컴퓨팅 환경에서 돌릴 수 없어, 파라미터를 따로 받도록 구현. 충분하면 1024로 지정하여 실험하며 됨
 * EC2의 특정 instance에서 테스트 마쳤다는 내용 추가 (모든 퍼포먼스는 EC2 기준으로 작성되어 있다고 얘기)
+* 혹시 모르니 Dockerhub에 Push 해둘까..?

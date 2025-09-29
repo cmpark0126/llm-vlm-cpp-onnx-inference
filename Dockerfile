@@ -15,6 +15,10 @@ RUN apt-get update && apt-get install -y \
     htop \
     libopencv-dev \
     python3-opencv \
+    libcairo2-dev \
+    libgirepository1.0-dev \
+    pkg-config \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ONNX Runtime
