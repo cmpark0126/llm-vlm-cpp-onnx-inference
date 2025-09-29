@@ -14,11 +14,6 @@ sudo docker run --name llm-vlm-dev -v $(pwd):/workspace --memory="16g" --shm-siz
 $ ... # 컨테이너 내부 자동 진입, 호스트 파일 변경 실시간 반영
 ```
 
-컨테이너 종료 및 제거:
-```bash
-sudo docker stop llm-vlm-dev && docker rm llm-vlm-dev
-```
-
 ## 사전 작업 및 과제 실행
 Docker 컨테이너 내에서:
 ```bash
@@ -49,3 +44,8 @@ cd ..
 
 ## 결과 리포트
 - [REPORT.md](./REPORT.md)
+
+## 컨테이너 종료 및 제거
+```bash
+sudo docker stop llm-vlm-dev && docker rm llm-vlm-dev
+```
