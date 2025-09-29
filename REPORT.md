@@ -32,7 +32,7 @@
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
 |------|----------------|-------------------|--------|
 | TTFT (ms) | 715.9 | 830.0 | -15.9% (악화) |
-| TPOT (ms) | 73.3 | 77.0 | -5.1% (악화) |
+| TPOT (ms) | 73.3 | 77.0 | -5.0% (악화) |
 | Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
 
 ### 총평
@@ -46,7 +46,7 @@
 ### Problem 1: LLM 텍스트 생성
 **구현 내용:**
 - **LLM Tokenizer 구현** (common/LlmTokenizer.*)
-  - SentencePiece 스타일 토크나이저 구현 (공백을 `▁`로 변환)
+  - 공백을 `▁`로 변환하여 vocab에서 매칭되는 것들을 검색하는 등의 구현 포함
 - **ONNX 기반 LLM 추론 엔진** (problem1-llm/main.cpp)
 
 **성능 고려 사항:**
@@ -156,7 +156,7 @@ the atmosphere, making it a visually appealing scene."
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
 |------|----------------|-------------------|--------|
 | TTFT (ms) | 715.9 | 830.0 | -15.9% (악화) |
-| TPOT (ms) | 73.3 | 77.0 | -5.1% (악화) |
+| TPOT (ms) | 73.3 | 77.0 | -5.0% (악화) |
 | Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
 
 **향후 계획:**
