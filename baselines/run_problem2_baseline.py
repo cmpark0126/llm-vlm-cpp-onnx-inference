@@ -162,7 +162,8 @@ def execute_split_model(tokenizer, model, inputs):
     print(f"Time-Per-Output-Token (TPOT): {tpot_ms:.3f} ms")
     print(f"Peak Memory Usage: {peak_memory_mb:.2f} MB")
     print(f"Total Generation Time: {total_generation_time_ms:.3f} ms")
-    print(f"Total Tokens Generated: {generated_tokens}")
+    # +1 because we don't count the first token
+    print(f"Total Tokens Generated: {generated_tokens + 1}")
 
 
 if __name__ == "__main__":
