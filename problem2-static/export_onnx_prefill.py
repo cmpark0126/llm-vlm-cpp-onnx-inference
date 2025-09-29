@@ -45,11 +45,6 @@ class StaticGemmaPrefill(nn.Module):
         self.lm_head = original_model.lm_head  # 언어 모델 헤드 (logits 생성)
 
         # 정적 컴포넌트들을 미리 계산
-        self._prepare_static_components()
-
-    def _prepare_static_components(self):
-        # 정적 컴포넌트들 미리 계산 (위치 ID, 마스크, KV cache 구조)
-
         self._prepare_static_masks()
 
     def _prepare_static_masks(self):
@@ -66,41 +61,34 @@ class StaticGemmaPrefill(nn.Module):
         self.static_full_attention_mask = causal_mask
 
         # Sliding window attention 마스크 (설정된 경우)
-        if (
-            hasattr(self.config, "sliding_window")
-            and self.config.sliding_window is not None
-        ):
-            sliding_window = self.config.sliding_window
-            sliding_mask = causal_mask.clone()
+        assert self.config.sliding_window is not None, "Sliding window must be set"
+        sliding_window = self.config.sliding_window
+        sliding_mask = causal_mask.clone()
 
-            # Sliding window 적용 - 윈도우 크기를 벗어난 토큰들 마스킹
-            for i in range(self.seq_length):
-                start_pos = max(0, i - sliding_window)
-                if start_pos > 0:
-                    sliding_mask[i, :start_pos] = float("-inf")
+        # Sliding window 적용 - 윈도우 크기를 벗어난 토큰들 마스킹
+        for i in range(self.seq_length):
+            start_pos = max(0, i - sliding_window)
+            if start_pos > 0:
+                sliding_mask[i, :start_pos] = float("-inf")
 
-            self.static_sliding_attention_mask = sliding_mask
-        else:
-            # Sliding window가 설정되지 않은 경우 일반 causal mask 사용
-            self.static_sliding_attention_mask = causal_mask
+        self.static_sliding_attention_mask = sliding_mask
 
-    def _create_static_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
-        # 패딩 마스크를 4D additive mask로 변환
+    def _create_input_attention_mask(self, attention_mask: torch.Tensor) -> torch.Tensor:
         batch_size = attention_mask.shape[0]
 
-        # Attention mask를 4D로 확장: [batch_size, 1, seq_length, seq_length]
-        expanded_mask = attention_mask.unsqueeze(1).unsqueeze(2)
-        expanded_mask = expanded_mask.expand(
+        # Attention mask 형태 변환
+        layer_attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+        layer_attention_mask = layer_attention_mask.expand(
             batch_size, 1, self.seq_length, self.seq_length
         )
 
         # Additive mask로 변환 (0은 주의할 수 있음, -inf는 무시)
-        inverted_mask = 1.0 - expanded_mask
-        attention_mask_float = inverted_mask.masked_fill(
+        inverted_mask = 1.0 - layer_attention_mask
+        layer_attention_mask = inverted_mask.masked_fill(
             inverted_mask.to(torch.bool), float("-inf")
         )
 
-        return attention_mask_float
+        return layer_attention_mask
 
     def forward(self, input_ids: torch.LongTensor, attention_mask: torch.Tensor,
                 position_ids: torch.LongTensor) -> Tuple[torch.Tensor, ...]:
@@ -118,7 +106,7 @@ class StaticGemmaPrefill(nn.Module):
         inputs_embeds = self.embed_tokens(input_ids)
 
         # 4. Attention mask 생성
-        input_attention_mask = self._create_static_attention_mask(attention_mask)
+        input_attention_mask = self._create_input_attention_mask(attention_mask)
 
         # 패딩 마스크와 causal mask 결합
         full_attention_mask = (

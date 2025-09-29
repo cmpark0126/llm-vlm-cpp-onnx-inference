@@ -75,50 +75,6 @@ class StaticGemmaDecode(nn.Module):
         self.rotary_emb_local = original_model.model.rotary_emb_local  # 지역 위치 인코딩
         self.lm_head = original_model.lm_head  # 언어 모델 헤드
 
-        # 정적 컴포넌트들을 미리 계산
-        self._prepare_static_components()
-
-    def _prepare_static_components(self):
-        # 정적 컴포넌트들 미리 계산 (위치 ID, 마스크, KV cache 구조)
-
-        # 캐시 위치 정보
-        self.register_buffer(
-            "static_cache_position",
-            torch.arange(0, self.cache_length, dtype=torch.long)
-        )
-
-        # 위치 ID 플레이스홀더
-        self.register_buffer(
-            "static_position_ids",
-            torch.zeros(1, self.input_seq_length, dtype=torch.long)
-        )
-
-        # Attention mask 및 KV cache 초기화
-        self._prepare_static_masks()
-
-        self._prepare_static_kv_cache()
-
-    def _prepare_static_masks(self):
-        # Decode 단계에서는 동적 마스크 사용
-        pass
-
-    def _prepare_static_kv_cache(self):
-        # KV cache 구조 및 메타데이터 초기화
-
-        num_layers = len(self.layers)
-        num_key_value_heads = getattr(
-            self.config, "num_key_value_heads", self.config.num_attention_heads
-        )
-        head_dim = self.config.head_dim
-
-        # KV cache 고정 형태 정의
-        self.static_k_cache_shape = (1, num_key_value_heads, self.cache_length, head_dim)
-        self.static_v_cache_shape = (1, num_key_value_heads, self.cache_length, head_dim)
-
-
-        # 레이어 수 정보 저장
-        self.register_buffer("cache_layers_info", torch.tensor(num_layers))
-
 
     def forward(self, input_ids: torch.LongTensor, position_ids: torch.LongTensor,
                 attention_mask: torch.Tensor, cache_position: torch.Tensor,
