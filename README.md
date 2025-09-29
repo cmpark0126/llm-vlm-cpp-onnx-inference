@@ -25,7 +25,8 @@ Docker 컨테이너 내에서:
 # 예제 허깅페이스 레포 다운로드 (문제1, 3)
 ./setup.sh
 
-# Hugging Face 토큰 설정  (문제 2)
+# Hugging Face 토큰 설정 (문제 2)
+# 사전에 gemma-3-1b-it 활용 허가를 받은 token이어야 함
 export HF_TOKEN=your_huggingface_token_here
 
 # 각 문제는 ./run.sh 를 실행하면 (1) python baseline 코드를 실행하고, (2) 이후 C++ 구현을 실행하도록 구성되어 있다.
