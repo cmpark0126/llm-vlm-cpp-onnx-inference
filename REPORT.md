@@ -6,7 +6,7 @@
 **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
   - C++ ONNX Runtime이 유효하게 동작함
 
-**성능 비교:**
+**성능 비교:**: Python과 C++이 거의 비슷한 성능을 보이는 것으로 보임
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
 |------|----------------|-------------------|--------|
 | TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
@@ -51,19 +51,20 @@
 - **LLM Tokenizer 구현** (common/LlmTokenizer.*)
   - 공백을 `▁`로 변환하여 vocab에서 매칭되는 것들을 검색하는 등의 구현 포함
 - **ONNX 기반 LLM 추론 엔진** (problem1-llm/main.cpp)
-
-**성능 고려 사항:**
 - **메모리 연산 최적화**: KV cache에서 move 활용으로 불필요한 복사 제거
+
+**성능 비교:**
 
 **결과:**
 - **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+- **성능 비교**: Python과 C++이 거의 비슷한 성능을 보이는 것으로 보임
 
-**성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
 |------|----------------|-------------------|--------|
 | TTFT (ms) | 1,570.6 | 1,769.0 | -12.6% (악화) |
 | TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
 | Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
+
 
 **향후 개선 방안:**
 - **일반화 개선**: 다양한 프롬프트와 토큰 길이에 대한 테스트 확대
@@ -107,11 +108,10 @@
 | Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
 
 **향후 개선 방안:**
+- **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
 - **검증 강화**: 다양한 프롬프트와 토큰 길이로 Decode sliding mask 구현 검증
 - **메모리 최적화**: Prefill/Decode 모델 간 weight 공유 방안 검토, onnx runtime 출력 공간 사전 할당 방안 검토
 - **성능 최적화**: 상황에 따라 decode에서 더 작은 sequence length를 가정하는 kv cache를 사용할 수 있을지 고려
-- **배치 처리**: 다중 배치 지원 방안 고려
-- **성능 분석**: 프로파일링을 통한 병목 지점 분석 및 해결
 
 ---
 
@@ -136,16 +136,16 @@
 - **메모리 최적화**: KV cache에서 move 활용으로 불필요한 복사 제거
 
 **결과:**
-- **기능 검증**: C++와 Python 구현이 거의 동일한 결과 출력 확인. 정확히 같지 않은 이유는 이미지 처리 과정에서 오차가 발생하여 그런 것으로 확인
+- **기능 검증**: C++와 Python 구현이 거의 동일한 결과 출력 확인. 이미지 처리 과정에서 부동소수점 오차가 있어 차이가 발생하는 것으로 예상.
 
-  - Python (run_vlm.py)
+  - Python: 
     "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
     a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
     that it is likely a densely populated urban area **with a mix of modern and traditional**
     **architecture. The night setting adds to the atmosphere of the scene, making it a visually**
     **appealing and captivating image.**"
 
-  - C++ (problem3-vlm)
+  - C++: 
     "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
     a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
     that it is likely a densely populated urban area. **The night view of the city also adds to**
@@ -161,9 +161,8 @@
 | Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
 
 **향후 계획:**
-- 모든 모델들이 f16을 사용하도록 양자화 하는 방법 고려
-- text embedding 모델이 f32를 사용하도록 변경하는 방법 고려
-- text embedding, image embedding 합칠 때, 더 효율적으로 진행하는 방법 고려
+- **모델 입출력 타입 단일화**: 모든 모델들이 f16을 사용하도록 양자화 하거나, text embedding 모델이 f32 출력을 만들도록 변경 고려.
+- **메모리 연산 최적화**: text embedding, image embedding 합칠 때, 더 효율적으로 진행하는 방법 고려
 
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
