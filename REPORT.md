@@ -2,7 +2,7 @@
 
 ## 요약
 
-### Problem 1: LLM 추론 성능 비교 (C++ vs Python)
+### ==Problem 1: LLM 추론 성능 비교 (C++ vs Python)==
 **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
   - C++ ONNX Runtime이 유효하게 동작함
 
@@ -13,7 +13,7 @@
 | TPOT (ms) | 601.1 | 623.5 | -3.7% (악화) |
 | Peak Memory (MB) | 4,039.3 | 3,479.1 | +13.9% (개선) |
 
-### Problem 2: Static Graph 추론 성능 비교 (C++ vs Python)
+### ==Problem 2: Static Graph 추론 성능 비교 (C++ vs Python)==
 **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
   - 주어진 프롬프트에 대해 Static Graph가 기존 동적 그래프와 같은 동작을 보임
 
@@ -24,7 +24,7 @@
 | TPOT (ms) | 137.7 | 151.5 | -10.0% (악화) |
 | Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
 
-### Problem 3: VLM 추론 성능 비교 (C++ vs Python)
+### ==Problem 3: VLM 추론 성능 비교 (C++ vs Python)==
 **기능 검증**: C++와 Python 구현이 **거의 동일한** 결과 출력 확인
  - 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
 
@@ -43,7 +43,7 @@
 
 ## 상세 결과
 
-### Problem 1: LLM 텍스트 생성
+### ==Problem 1: LLM 텍스트 생성==
 **구현 내용:**
 - **LLM Tokenizer 구현** (common/LlmTokenizer.*)
   - 공백을 `▁`로 변환하여 vocab에서 매칭되는 것들을 검색하는 등의 구현 포함
@@ -68,7 +68,7 @@
 
 ---
 
-### Problem 2: Static Graph Export & 텍스트 생성
+### ==Problem 2: Static Graph Export & 텍스트 생성==
 **구현 내용:**
 - **Gemma Python 베이스라인 작성:**
   - Static ONNX graph 추출 전 베이스라인 확보
@@ -77,8 +77,7 @@
 - **Prefill & Decode Static ONNX Graph 추출:**
   - **참고 구현**: `transformers/models/gemma3/modeling_gemma3.py`의 `Gemma3ForCausalLM`
   - **KV Cache 처리**: `transformers/cache_utils.py`의 `Cache::update` 인터페이스를 duck typing으로 구현
-
-  **모델 별 구현 차이:**
+- **Prefill & Decode Static Graph 구현 주요 차이:**
   | 특성 | Prefill 모델 | Decode 모델 |
   |------|-------------|------------|
   | **Sliding Window 구현 여부** | 미구현 (max sequence length(128) < sliding window(512)) | 구현 (max sequence length(1024) > sliding window(512)) |
@@ -113,7 +112,7 @@
 
 ---
 
-### Problem 3: VLM 텍스트 생성
+### ==Problem 3: VLM 텍스트 생성==
 **사전 작업:**
 - 프롬프트 수정으로 이미지 토큰 처리 테스트 수행
   ```
@@ -136,20 +135,20 @@
 **결과:**
 - **기능 검증**: C++와 Python 구현이 거의 동일한 결과 출력 확인. 정확히 같지 않은 이유는 이미지 처리 과정에서 오차가 발생하여 그런 것으로 확인
 
-```bash
-# Python (run_vlm.py)
-"The image is likely from a city in Asia, as it features a city skyline with tall buildings,
-a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
-that it is likely a densely populated urban area with a mix of modern and traditional
-architecture. The night setting adds to the atmosphere of the scene, making it a visually
-appealing and captivating image."
+    ```bash
+    # Python (run_vlm.py)
+    "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
+    a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
+    that it is likely a densely populated urban area with a mix of modern and traditional
+    architecture. The night setting adds to the atmosphere of the scene, making it a visually
+    appealing and captivating image."
 
-# C++ (problem3-vlm)
-"The image is likely from a city in Asia, as it features a city skyline with tall buildings,
-a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
-that it is likely a densely populated urban area. The night view of the city also adds to
-the atmosphere, making it a visually appealing scene."
-```
+    # C++ (problem3-vlm)
+    "The image is likely from a city in Asia, as it features a city skyline with tall buildings,
+    a bridge, and a large body of water. The presence of a bridge and the city's skyline suggest
+    that it is likely a densely populated urban area. The night view of the city also adds to
+    the atmosphere, making it a visually appealing scene."
+    ```
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
