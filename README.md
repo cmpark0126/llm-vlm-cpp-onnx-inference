@@ -47,5 +47,5 @@ cd ..
 
 ## 컨테이너 종료 및 제거
 ```bash
-sudo docker stop llm-vlm-dev && docker rm llm-vlm-dev
+sudo docker stop llm-vlm-dev && sudo docker rm llm-vlm-dev
 ```
