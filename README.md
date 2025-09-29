@@ -28,6 +28,8 @@ Docker 컨테이너 내에서:
 # Hugging Face 토큰 설정  (문제 2)
 export HF_TOKEN=your_huggingface_token_here
 
+# 각 문제는 ./run.sh 를 실행하면 (1) python baseline 코드를 실행하고, (2) 이후 C++ 구현을 실행하도록 구성되어 있다.
+
 # 문제 1: LLM 텍스트 생성
 cd problem1-llm
 ./run.sh
@@ -43,3 +45,6 @@ cd problem3-vlm
 ./run.sh
 cd ..
 ```
+
+## 결과 리포트
+- [REPORT.md](./REPORT.md)
