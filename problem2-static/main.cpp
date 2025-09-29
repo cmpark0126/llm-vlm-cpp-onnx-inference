@@ -128,6 +128,7 @@ int main() {
 
     if (unload_prefill) {
         prefill_session.reset();
+        decode_session = std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
     }
 
     int64_t current_token = next_token_id;
@@ -139,10 +140,6 @@ int main() {
     std::vector<int64_t> decode_attention_mask(MAX_SEQ_LEN, 0);
     for (int i = 0; i < current_position; i++) {
         decode_attention_mask[i] = 1;
-    }
-
-    if (unload_prefill) {
-        decode_session = std::make_unique<Ort::Session>(env, decode_model_path.c_str(), session_options);
     }
 
     int num_layers = (outputs.size() - 1) / 2;
