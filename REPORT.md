@@ -14,6 +14,7 @@
 
 ### Problem 2: Static Graph 추론 성능 비교 (C++ vs Python)
 **기능 검증**: C++와 Python 구현이 완전히 동일한 결과 출력 확인
+  - 추출한 Static Graph가 적어도 주어진 프롬프트에 대해서는 기존 torch 동적 그래프 동작과 같은 동작을 한다고 유추할 수 있음
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
@@ -23,7 +24,8 @@
 | Peak Memory (MB) | 4,588.0 | 9,119.2 | -98.7% (악화) |
 
 ### Problem 3: VLM 추론 성능 비교 (C++ vs Python)
-**기능 검증**: C++와 Python 구현이 **거의 동일한** 결과 출력 확인 (이미지 처리 과정에서 미세한 오차로 인해 생성 결과 차이 발생)
+**기능 검증**: C++와 Python 구현이 **거의 동일한** 결과 출력 확인
+ - 원인: 이미지 전처리 과정에서 발생한 부동소수점 오차로 인한 것으로 예상됨 (아주 정확하지는 않음)
 
 **성능 비교:**
 | 지표 | Python Baseline | C++ Implementation | 개선율 |
@@ -32,17 +34,13 @@
 | TPOT (ms) | 73.3 | 77.0 | -5.1% (악화) |
 | Peak Memory (MB) | 4,146.9 | 3,517.2 | +15.2% (개선) |
 
-### 전체 성능 개선 요약
+### 총평
 - **C++ 결과 vs Python 결과 유사성**: 모든 문제에서 기능적 일치성 확인
-- **메모리 효율성**: Problem 1(+13.9%), Problem 3(+15.2%)에서 메모리 사용량 개선
-- **성능 트레이드오프**:
-  - TTFT, TPOT에서는 Python 대비 소폭 악화 (초기화 오버헤드)
-  - Problem 2에서 Static graph 구조의 메모리 오버헤드 발견
-- **개선 필요 영역**: ONNX Runtime 설정 최적화, 모델 로딩 전략 개선
+- **TTFT, TPOT, 메모리 최적화**: 아직 성능 최적화가 많이 필요함. 
+  - 성능 최적화를 한다면?: 프로파일링을 통한 C++ 구현 최적화, ONNX 설정 최적화, Graph 최적화 등이 가능할 것으로 보임
+
 
 ## 상세 결과
-
----
 
 ### Problem 1: LLM 텍스트 생성
 **구현 내용:**
@@ -168,7 +166,7 @@ the atmosphere, making it a visually appealing scene."
 ## 비고
 - TTFT, TPOT: [LLM Inference Performance Engineering: Best Practices](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)
 - Peak Memory Usage: [getrusage(2)](https://man7.org/linux/man-pages/man2/getrusage.2.html)
-- C++ 코드 작성에는 Claude Code를 많이 활용했습니다. 모든 코드는 직접 읽어보고 디버깅을 진행했습니다.
+- Claude Code를 많이 활용했습니다. 모든 코드는 직접 읽어보고 디버깅을 진행했습니다.
 
 ## TODO
 - 필요시 C++ 프로파일링도 진행해서, 고치지는 못하더라도 어디를 최적화하면 좋을지 보고서에 넣기 (성능 비교 과정에서)
